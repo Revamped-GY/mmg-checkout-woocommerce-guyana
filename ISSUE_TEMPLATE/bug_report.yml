@@ -1,0 +1,107 @@
+name: Bug report
+description: Report a problem so we can reproduce it and fix it
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug.
+        Please do not include private keys, certificates, or secrets.
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin version
+      description: Example: 2.14.12
+      placeholder: "2.x.x"
+    validations:
+      required: true
+
+  - type: input
+    id: wp_version
+    attributes:
+      label: WordPress version
+      placeholder: "6.x.x"
+    validations:
+      required: true
+
+  - type: input
+    id: wc_version
+    attributes:
+      label: WooCommerce version
+      placeholder: "x.x.x"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: checkout_type
+    attributes:
+      label: Checkout type
+      options:
+        - WooCommerce Blocks checkout
+        - Classic checkout
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      options:
+        - Live mode
+        - Sandbox mode
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: Describe the problem clearly
+      placeholder: "Tell us what you expected and what happened instead"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps help us reproduce quickly
+      placeholder: |
+        1) Go to...
+        2) Click...
+        3) See...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output (redacted)
+      description: Paste relevant log lines or stack traces. Remove secrets.
+      placeholder: "Paste logs here"
+    validations:
+      required: false
+
+  - type: textarea
+    id: security_stack
+    attributes:
+      label: Security and caching context
+      description: List security plugins, caching plugins, and any hosting WAF rules if you know them
+      placeholder: "Example: Wordfence, Defender, Cloudflare, LiteSpeed Cache"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I did not include private keys, certificates, or secrets
+          required: true
+        - label: I downloaded the plugin from the official Revamped GY page
+          required: true
