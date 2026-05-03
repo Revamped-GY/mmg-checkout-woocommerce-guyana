@@ -1,0 +1,112 @@
+.mmgwc-qr{
+  --mmgwc-accent: var(--wp--preset--color--primary, #3655F6);
+  --mmgwc-bg: var(--wp--preset--color--background, #FFFFFF);
+  --mmgwc-text: var(--wp--preset--color--foreground, #202224);
+  --mmgwc-border: rgba(0,0,0,.10);
+  background: var(--mmgwc-bg);
+  color: var(--mmgwc-text);
+  border: 1px solid var(--mmgwc-border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 26px rgba(0,0,0,.06);
+  max-width: 520px;
+  margin: 14px 0;
+}
+
+.mmgwc-qr h3{
+  margin: 0 0 6px 0;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.mmgwc-qr p{
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  line-height: 1.45;
+  opacity: .92;
+}
+
+.mmgwc-qr .mmgwc-qr-actions{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.mmgwc-qr .mmgwc-qr-generate{
+  background: var(--mmgwc-accent);
+  color: #fff;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .15s ease, filter .15s ease;
+}
+
+.mmgwc-qr .mmgwc-qr-generate:hover{
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+.mmgwc-qr .mmgwc-qr-generate.is-busy{
+  opacity: .7;
+  cursor: progress;
+}
+
+.mmgwc-qr .mmgwc-qr-copy{
+  background: transparent;
+  color: var(--mmgwc-text);
+  border: 1px solid var(--mmgwc-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: transform .15s ease, background .15s ease;
+}
+
+.mmgwc-qr .mmgwc-qr-copy:hover{
+  background: rgba(0,0,0,.03);
+  transform: translateY(-1px);
+}
+
+.mmgwc-qr .mmgwc-qr-result{
+  display: none;
+  margin-top: 12px;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mmgwc-qr.mmgwc-qr-ready .mmgwc-qr-result{
+  display: flex;
+}
+
+.mmgwc-qr .mmgwc-qr-img{
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  border: 1px solid var(--mmgwc-border);
+}
+
+.mmgwc-qr .mmgwc-qr-link{
+  word-break: break-all;
+  font-size: 13px;
+  text-decoration: underline;
+  color: var(--mmgwc-accent);
+}
+
+.mmgwc-qr .mmgwc-qr-msg{
+  margin-top: 10px;
+  font-size: 13px;
+  opacity: .9;
+}
+
+@media (max-width: 480px){
+  .mmgwc-qr{
+    padding: 12px 12px;
+  }
+  .mmgwc-qr .mmgwc-qr-img{
+    width: 160px;
+    height: 160px;
+  }
+}

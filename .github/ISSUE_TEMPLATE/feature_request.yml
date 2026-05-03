@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest an improvement to the plugin
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is the merchant or customer trying to do that the plugin makes hard right now?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: A short description of the behaviour you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which area does this affect
+      options:
+        - Gateway and checkout flow
+        - Callback and order handling
+        - Diagnostics and logs
+        - Importer
+        - Exports and analytics
+        - Payment Requests
+        - QR Payments
+        - Subscriptions
+        - Customer portal
+        - Support Bundle
+        - Feature Manager and Role Manager
+        - Updater
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes

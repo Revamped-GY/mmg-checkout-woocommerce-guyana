@@ -1,0 +1,202 @@
+/*
+ * MMG Checkout Admin UI
+ * Brand palette (Revamped GY):
+ * Primary #121921, Secondary #F5F5FF, Accent #3655F6
+ * Headline #101010, Body #524F4F
+ * Dark Neutral #202224, Light Neutral #EDEFF1, White #FFFFFF
+ */
+
+.mmgwc-wrap{
+  --mmgwc-primary:#121921;
+  --mmgwc-secondary:#F5F5FF;
+  --mmgwc-accent:#3655F6;
+  --mmgwc-headline:#101010;
+  --mmgwc-body:#524F4F;
+  --mmgwc-dark-neutral:#202224;
+  --mmgwc-light-neutral:#EDEFF1;
+  --mmgwc-white:#FFFFFF;
+
+  max-width: 1200px;
+}
+
+.mmgwc-wrap h1, .mmgwc-wrap h2, .mmgwc-wrap h3{
+  color: var(--mmgwc-headline);
+}
+
+.mmgwc-wrap p, .mmgwc-wrap li, .mmgwc-wrap td, .mmgwc-wrap th{
+  color: var(--mmgwc-body);
+}
+
+.mmgwc-brandbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:14px 16px;
+  background: var(--mmgwc-secondary);
+  border:1px solid var(--mmgwc-light-neutral);
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(18,25,33,.06);
+  margin: 10px 0 16px;
+}
+
+.mmgwc-brand-left{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width: 0;
+}
+
+.mmgwc-brand-logo{
+  display:inline-flex;
+  align-items:center;
+}
+
+.mmgwc-brand-logo img{
+  height: 30px;
+  width: auto;
+  max-width: 240px;
+}
+
+.mmgwc-brand-titles{
+  min-width:0;
+}
+
+.mmgwc-brand-kicker{
+  font-size:12px;
+  letter-spacing:.02em;
+  color: var(--mmgwc-dark-neutral);
+  opacity:.8;
+  margin-bottom:2px;
+}
+
+.mmgwc-brand-title{
+  font-size:16px;
+  font-weight: 650;
+  color: var(--mmgwc-primary);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.mmgwc-brand-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
+.mmgwc-card{
+  background: var(--mmgwc-white);
+  border:1px solid var(--mmgwc-light-neutral);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 26px rgba(18,25,33,.06);
+  margin: 14px 0;
+}
+
+.mmgwc-card > h2:first-child,
+.mmgwc-card > h3:first-child{
+  margin-top: 0;
+}
+
+.mmgwc-wrap a{
+  color: var(--mmgwc-accent);
+}
+
+.mmgwc-wrap a:hover{
+  color: #2c46cf;
+}
+
+/* Buttons */
+.mmgwc-wrap .button,
+.mmgwc-wrap .button-secondary,
+.mmgwc-wrap .button-primary{
+  border-radius: 10px;
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+}
+
+.mmgwc-wrap .button:hover,
+.mmgwc-wrap .button-secondary:hover,
+.mmgwc-wrap .button-primary:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(18,25,33,.10);
+}
+
+.mmgwc-wrap .button-primary{
+  background: var(--mmgwc-accent);
+  border-color: var(--mmgwc-accent);
+}
+
+.mmgwc-wrap .button-primary:hover,
+.mmgwc-wrap .button-primary:focus{
+  filter: brightness(1.03);
+}
+
+.mmgwc-wrap .button-primary:focus{
+  box-shadow: 0 0 0 3px rgba(54,85,246,.25);
+}
+
+/* Forms */
+.mmgwc-wrap input[type="text"],
+.mmgwc-wrap input[type="email"],
+.mmgwc-wrap input[type="number"],
+.mmgwc-wrap input[type="date"],
+.mmgwc-wrap input[type="url"],
+.mmgwc-wrap select,
+.mmgwc-wrap textarea{
+  border-radius: 10px;
+  border: 1px solid var(--mmgwc-light-neutral);
+  padding: 8px 10px;
+}
+
+.mmgwc-wrap input[type="text"]:focus,
+.mmgwc-wrap input[type="email"]:focus,
+.mmgwc-wrap input[type="number"]:focus,
+.mmgwc-wrap input[type="date"]:focus,
+.mmgwc-wrap input[type="url"]:focus,
+.mmgwc-wrap select:focus,
+.mmgwc-wrap textarea:focus{
+  border-color: rgba(54,85,246,.75);
+  box-shadow: 0 0 0 3px rgba(54,85,246,.18);
+}
+
+/* Tables */
+.mmgwc-wrap .widefat,
+.mmgwc-wrap table.form-table{
+  background: var(--mmgwc-white);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mmgwc-wrap .widefat th,
+.mmgwc-wrap .widefat td{
+  vertical-align: top;
+}
+
+.mmgwc-wrap .widefat thead th{
+  background: #fafbff;
+}
+
+/* Notices */
+.mmgwc-wrap .notice{
+  border-radius: 12px;
+}
+
+/* Help footer inside Help page only */
+.mmgwc-help-footer{
+  margin-top:22px;
+  border-top:1px solid #dcdcde;
+  padding-top:12px;
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+@media (max-width: 782px){
+  .mmgwc-wrap{max-width: 100%;}
+  .mmgwc-brandbar{padding:12px;}
+  .mmgwc-brand-logo img{height:28px; max-width: 200px;}
+  .mmgwc-brand-actions{justify-content:flex-start;}
+}

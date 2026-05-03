@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/revampedgy/mmg-checkout-woocommerce/security/policy
+    about: Please do not open a public issue for security problems. Email support@revamped.gy or use private security advisories.
+  - name: Plugin support
+    url: https://revamped.gy/mmg-woocommerce-plugin-guyana
+    about: General product support and pricing questions.

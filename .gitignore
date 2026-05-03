@@ -1,0 +1,91 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+*.old
+*.orig
+*CLAUDE.md
+
+# Build artefacts. Plugin ZIPs are produced by GitHub Actions on tag push and uploaded as release assets.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+build/
+dist/
+staging/
+
+# Per-release notes drafts. The template lives at .github/RELEASE_NOTES_TEMPLATE.md.
+# Copy it to release-notes.md, edit, pass to gh release create --notes-file, then leave behind locally.
+release-notes.md
+
+# Dependency folders
+node_modules/
+vendor/
+bower_components/
+
+# Local secrets and developer environment. These should never be committed.
+wp-config.php
+wp-config-local.php
+.env
+.env.*
+!.env.example
+setup.cfg
+keys/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+auth.json
+
+# Local logs
+*.log
+debug.log
+error_log
+npm-debug.log*
+yarn-debug.log*
+
+# Database exports / dumps
+*.sql
+*.sql.gz
+*.sqlite
+*.sqlite3
+
+# WordPress local installs (in case the repo is cloned inside a wp-content folder)
+wp-content/uploads/
+wp-content/wc-logs/
+wp-content/cache/
+wp-content/upgrade/
+wp-content/backup/
+wp-content/backups/
+wp-content/debug.log
+wp-content/object-cache.php
+wp-content/advanced-cache.php
+
+# Test, coverage and PHP tooling caches
+coverage/
+.phpunit.cache/
+.phpunit.result.cache
+.phpcs-cache
+.php_cs.cache
+.phpstan.neon.cache
+
+# MMG proprietary reference material and any other local-only docs.
+# The docs/ folder is intentionally not tracked.
+docs/
+
+# Old per-version source snapshots (kept locally, not committed). Git tags replace these.
+mmg-checkout-woocommerce-v*-src/
+mmg-checkout-woocommerce-v*.*.*/
+!mmg-checkout-woocommerce/
+CLAUDE.md

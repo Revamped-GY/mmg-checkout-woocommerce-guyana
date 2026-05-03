@@ -1,0 +1,76 @@
+name: Lint
+
+# Runs on every push and pull request against main. Catches PHP syntax errors
+# before they reach a release tag.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP syntax
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ["7.4", "8.0", "8.1", "8.2", "8.3"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          coverage: none
+
+      - name: Lint every PHP file
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            out=$(php -l "$f" 2>&1)
+            if ! echo "$out" | grep -q "No syntax errors"; then
+              echo "FAIL: $f"
+              echo "$out"
+              fail=1
+            fi
+          done < <(find . -type f -name "*.php" \
+            -not -path "./.git/*" \
+            -not -path "./.github/*" \
+            -not -path "./build/*" \
+            -not -path "./vendor/*" \
+            -not -path "./node_modules/*" -print0)
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::PHP syntax errors found"
+            exit 1
+          fi
+          echo "All PHP files pass lint."
+
+  version-sync:
+    name: Plugin version markers agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare version markers
+        run: |
+          set -euo pipefail
+          HEADER_VERSION=$(grep -E "^[[:space:]]*\*[[:space:]]*Version:" mmg-checkout-woocommerce.php | head -n1 | sed -E 's/.*Version:[[:space:]]*//')
+          CONST_VERSION=$(grep -E "MMGWC_VERSION" mmg-checkout-woocommerce.php | head -n1 | sed -E "s/.*'([^']+)'.*/\1/")
+          STABLE_TAG=$(grep -E "^Stable tag:" readme.txt | head -n1 | sed -E 's/Stable tag:[[:space:]]*//')
+
+          echo "Plugin header: ${HEADER_VERSION}"
+          echo "Const:         ${CONST_VERSION}"
+          echo "Stable tag:    ${STABLE_TAG}"
+
+          if [ "${HEADER_VERSION}" != "${CONST_VERSION}" ] || [ "${HEADER_VERSION}" != "${STABLE_TAG}" ]; then
+            echo "::error::Version markers do not agree. Update the plugin header, MMGWC_VERSION constant and readme.txt Stable tag together."
+            exit 1
+          fi
+          echo "All version markers agree on ${HEADER_VERSION}."

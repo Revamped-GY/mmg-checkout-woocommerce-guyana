@@ -1,0 +1,140 @@
+name: Release
+
+# Builds the plugin ZIP, verifies that all three version markers agree, computes a
+# SHA-256 and attaches the ZIP plus a .sha256 sidecar to the GitHub Release.
+#
+# Trigger: a release is published from a tag of the form vX.Y.Z (created either via
+# the GitHub UI from a tag, or by `gh release create vX.Y.Z`). The tag must match
+# the plugin version inside the source files or the workflow fails.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and attach plugin ZIP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source at the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Resolve version numbers
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          HEADER_VERSION=$(grep -E "^[[:space:]]*\*[[:space:]]*Version:" mmg-checkout-woocommerce.php | head -n1 | sed -E 's/.*Version:[[:space:]]*//')
+          CONST_VERSION=$(grep -E "MMGWC_VERSION" mmg-checkout-woocommerce.php | head -n1 | sed -E "s/.*'([^']+)'.*/\1/")
+          STABLE_TAG=$(grep -E "^Stable tag:" readme.txt | head -n1 | sed -E 's/Stable tag:[[:space:]]*//')
+
+          echo "Tag:           ${TAG}"
+          echo "Version:       ${VERSION}"
+          echo "Plugin header: ${HEADER_VERSION}"
+          echo "Const:         ${CONST_VERSION}"
+          echo "Stable tag:    ${STABLE_TAG}"
+
+          if [ "${VERSION}" != "${HEADER_VERSION}" ] || [ "${VERSION}" != "${CONST_VERSION}" ] || [ "${VERSION}" != "${STABLE_TAG}" ]; then
+            echo "::error::Tag ${TAG} does not match plugin version markers."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Lint PHP
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            out=$(php -l "$f" 2>&1)
+            if ! echo "$out" | grep -q "No syntax errors"; then
+              echo "FAIL: $f"
+              echo "$out"
+              fail=1
+            fi
+          done < <(find . -type f -name "*.php" \
+            -not -path "./.git/*" \
+            -not -path "./.github/*" \
+            -not -path "./build/*" \
+            -not -path "./vendor/*" \
+            -not -path "./node_modules/*" -print0)
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::PHP syntax errors detected. Aborting release build."
+            exit 1
+          fi
+
+      - name: Stage plugin folder
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/mmg-checkout-woocommerce
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='.editorconfig' \
+            --exclude='.env' \
+            --exclude='.env.example' \
+            --exclude='build/' \
+            --exclude='dist/' \
+            --exclude='staging/' \
+            --exclude='node_modules/' \
+            --exclude='vendor/' \
+            --exclude='tests/' \
+            --exclude='docs/' \
+            --exclude='CLAUDE.md' \
+            --exclude='CONTRIBUTING.md' \
+            --exclude='SECURITY.md' \
+            --exclude='CHANGELOG.md' \
+            --exclude='README.md' \
+            --exclude='*.zip' \
+            --exclude='*.log' \
+            --exclude='*.bak' \
+            --exclude='*.swp' \
+            --exclude='.DS_Store' \
+            --exclude='Thumbs.db' \
+            ./ build/mmg-checkout-woocommerce/
+
+      - name: Build ZIP
+        id: zip
+        run: |
+          set -euo pipefail
+          NAME="mmg-checkout-woocommerce-v${{ steps.ver.outputs.version }}.zip"
+          ( cd build && zip -qr "../${NAME}" mmg-checkout-woocommerce )
+          SHA=$(sha256sum "${NAME}" | awk '{print $1}')
+          echo "${SHA}  ${NAME}" > "${NAME}.sha256"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+          ls -la "${NAME}" "${NAME}.sha256"
+          echo "SHA-256: ${SHA}"
+
+      - name: Attach assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: |
+            ${{ steps.zip.outputs.name }}
+            ${{ steps.zip.outputs.name }}.sha256
+          append_body: true
+          body: |
+
+            ---
+
+            **Installable ZIP:** `${{ steps.zip.outputs.name }}`
+            **SHA-256:** `${{ steps.zip.outputs.sha256 }}`
+
+            Verify before installing:
+
+            ```
+            sha256sum -c ${{ steps.zip.outputs.name }}.sha256
+            ```

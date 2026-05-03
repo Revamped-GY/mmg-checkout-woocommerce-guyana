@@ -1,0 +1,89 @@
+name: Bug report
+description: Report a problem with the plugin
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please do not include any live MMG credentials, private keys, full callback tokens or customer order details. Redact anything sensitive before posting.
+
+        For security issues do not open a public issue. See SECURITY.md.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "2.14.20"
+    validations:
+      required: true
+  - type: input
+    id: wordpress-version
+    attributes:
+      label: WordPress version
+      placeholder: "6.9.1"
+    validations:
+      required: true
+  - type: input
+    id: woocommerce-version
+    attributes:
+      label: WooCommerce version
+      placeholder: "9.4.0"
+    validations:
+      required: true
+  - type: input
+    id: php-version
+    attributes:
+      label: PHP version
+      placeholder: "8.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - sandbox
+        - live
+        - both
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the problem.
+      placeholder: When I do X, the plugin does Y instead of Z.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that someone else can follow.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste the redacted output from the MMG Checkout Logs page or a Support Bundle excerpt. Do not paste anything that contains real tokens or PEM blocks.
+      render: shell
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have searched existing issues to avoid duplicates.
+          required: true
+        - label: I have redacted any sensitive values from the report.
+          required: true

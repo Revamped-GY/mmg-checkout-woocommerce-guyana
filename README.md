@@ -1,0 +1,98 @@
+# MMG Checkout for WooCommerce
+
+A WooCommerce payment gateway and merchant operations toolkit for MMG (Mobile Money Guyana). Built and maintained by Revamped GY.
+
+The plugin adds MMG as a payment method on classic and Block checkout, handles encrypted callbacks and bundles a set of admin tools that most Guyanese stores end up needing once they go live: credential importer, diagnostics, exports, payment requests, QR payments, reminder-based subscriptions, support bundle, role manager and a self-hosted updater.
+
+## Features
+
+- MMG payment method on classic checkout and WooCommerce Blocks checkout
+- Sandbox (UAT) and Live mode with one-click switching
+- Credential importer that reads the standard MMG ZIP package (or `setup.cfg` plus `.pem` keys)
+- Resilient callback handling with three URL shapes accepted, idempotent processing and clear order notes
+- Currency conversion to GYD for non-GYD stores with rounding to the nearest 100
+- Verify Payment and Resend Payment Link tools on the order screen
+- Payment Requests using the standard WooCommerce pay-for-order flow
+- QR Payments with locally generated SVG codes (no third-party QR services)
+- Reminder-based subscription renewals with a custom subscriber table
+- Customer portal endpoints under My Account: My Invoices, My Subscriptions
+- Detailed CSV exports and a monthly summary export, both Excel-safe
+- Lightweight Analytics dashboard for weekly and monthly totals
+- Diagnostics page with environment checks, callback URLs and rate refresh
+- Support Bundle that ships a redacted ZIP for faster troubleshooting
+- Feature Manager and Role Manager for module-level access control
+- Self-hosted updater that reads from GitHub Releases
+
+## Tech stack
+
+- WordPress plugin (PHP 7.4+, WordPress 6.0+)
+- WooCommerce 7.0 or later, tested up to 9.4
+- RSA-OAEP (SHA-256) crypto using OpenSSL with a hand-rolled OAEP wrapper to match MMG's reference implementation
+- AES-256-GCM at-rest encryption for secrets and private keys, keyed on the site's `AUTH_KEY`
+- WooCommerce Blocks Cart and Checkout integration
+
+## Requirements
+
+- WordPress 6.0 or newer
+- PHP 7.4 or newer (PHP 8.x supported)
+- WooCommerce 7.0 or newer
+- OpenSSL extension (default on every supported PHP build)
+- A live or sandbox MMG Merchant Checkout credential package from MMG Merchant Services
+
+## Installation
+
+1. Download the latest plugin ZIP from the [Releases](../../releases) page.
+2. In WordPress admin go to **Plugins → Add New → Upload Plugin** and upload the ZIP.
+3. Activate the plugin.
+4. Go to **MMG Checkout → Importer** and upload your MMG credential package (Sandbox first).
+5. Test end-to-end and send the test recording to MMG Merchant Services.
+6. When MMG approves you for production, import the Live package and switch the mode.
+
+## Configuration
+
+Most settings live under **WP Admin → MMG Checkout → Settings**. Sensitive values (private keys, secret keys, optional API credentials) are encrypted at rest. You can also override any setting from `wp-config.php` using a constant. The Diagnostics page lists every supported constant with example syntax.
+
+The callback URL is shown on the Diagnostics page. Send that URL to MMG when you request your credential package. You do not configure the callback yourself.
+
+## Usage
+
+After installation customers see MMG on the checkout page next to the other payment methods. They click **Place Order**, get redirected to the MMG hosted page, complete OTP authorisation and return to the order received page.
+
+For invoice-style billing use **MMG Checkout → Payment Requests** to create a pay-for-order link and send it to the customer. For repeat billing use **MMG Checkout → Subscriptions** to track subscribers and schedule reminder emails. For in-person or shareable payment use **MMG Checkout → QR Payments** to generate a QR or short link.
+
+## Updates
+
+From version 2.14.21 onward updates are delivered through this repository's GitHub Releases. The plugin checks for the latest release every six hours, verifies the download is a `.zip` asset on a github.com host and applies the update through the standard WordPress upgrader. An optional SHA-256 sidecar file (`<filename>.zip.sha256`) attached to the release is verified before install.
+
+If you need to point the updater somewhere else, the GitHub repository can be filtered:
+
+```php
+add_filter( 'mmgwc_github_repo', function() {
+    return 'your-org/your-fork';
+} );
+```
+
+## Security
+
+Please report security issues privately. See [SECURITY.md](SECURITY.md) for details. Do not open a public issue for anything that could be used to compromise a live store.
+
+The plugin handles encrypted MMG payment tokens, never logs raw secrets or PEM blocks, encrypts protected settings at rest and rejects update packages whose hash does not match the declared SHA-256 when one is provided.
+
+## Troubleshooting
+
+- The Diagnostics page surfaces most setup problems (missing callback URL, missing credentials, currency conversion off, OpenSSL missing).
+- The Logs page shows recent plugin log entries with secrets redacted. Enable Debug logging in Settings before reproducing an issue.
+- The Support Bundle on the Support page produces a single ZIP with diagnostics and redacted logs. Send that to support instead of screenshots.
+- "Unable to process your request" on the MMG page after an abandoned attempt means MMG saw a duplicate `merchantTransactionId`. Plugin versions 2.14.20 and later regenerate this on every retry, so an upgrade resolves it.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list of changes per version.
+
+## Licence
+
+Released under the GPLv2 or later, the same licence WordPress and WooCommerce use. The full text is available at [https://www.gnu.org/licenses/old-licenses/gpl-2.0.html](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html). The licence is also declared in the plugin header at the top of `mmg-checkout-woocommerce.php`.
+
+## Author
+
+Built by [Revamped GY](https://revamped.gy). Plugin landing page: [revamped.gy/mmg-woocommerce-plugin-guyana](https://revamped.gy/mmg-woocommerce-plugin-guyana).
