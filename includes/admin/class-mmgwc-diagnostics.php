@@ -177,7 +177,7 @@ final class MMGWC_Diagnostics {
 			"define('MMGWC_LIVE_SECRET_KEY', '...');\n" .
 			"define('MMGWC_LIVE_PUBLIC_KEY', " . '"' . "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----" . '"' . ");\n" .
 			"define('MMGWC_LIVE_PRIVATE_KEY', " . '"' . "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----" . '"' . ");\n\n" .
-			"// Optional: Merchant Initiated API\n" .
+			"// Required: Merchant Initiated API verification\n" .
 			"define('MMGWC_MWALLET_BASE_URL', 'https://mwallet.mmgtest.net/mwallet/v1');\n" .
 			"define('MMGWC_API_KEY', '...');\n" .
 			"define('MMGWC_WSS_MID', '...');\n" .

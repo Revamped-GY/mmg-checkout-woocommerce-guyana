@@ -103,6 +103,18 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 	}
 
 	/**
+	 * Do not offer MMG at checkout unless settlement can be verified through
+	 * MMG's authenticated Transaction Lookup API.
+	 */
+	public function is_available() {
+		if ( ! parent::is_available() ) {
+			return false;
+		}
+		$config = $this->get_active_config();
+		return empty( MMGWC_Payment_Verifier::missing_api_fields( $config ) );
+	}
+
+	/**
 	 * Encrypt any sensitive fields before WooCommerce persists them.
 	 */
 	public function filter_sanitize_sensitive_fields( $sanitized ) {
@@ -275,9 +287,9 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 			),
 
 			'api_section' => array(
-				'title' => 'Optional: Merchant Initiated API (for lookups)',
+				'title' => 'Required: authenticated payment verification',
 				'type' => 'title',
-				'description' => 'If provided, the plugin can call the MMG Transaction Lookup API and store extra details. If you leave these blank, checkout still works.',
+				'description' => 'MMG Checkout is available to customers only when these Merchant Initiated API credentials are complete. Every successful browser callback is verified against MMG for transaction ID, amount, currency, merchant and payment status before WooCommerce marks an order paid.',
 			),
 			'api_mwallet_base_url' => array(
 				'title' => 'MWallet Base URL',
@@ -491,6 +503,10 @@ private function maybe_migrate_checkout_urls(): void {
 		);
 	}
 
+	private function new_merchant_transaction_id( WC_Order $order, int $timestamp ): string {
+		return (string) $order->get_id() . '-' . (string) $timestamp . '-' . bin2hex( random_bytes( 16 ) );
+	}
+
 	public function build_mmg_redirect_url( WC_Order $order, bool $force_new = false ): string {
 		$config = $this->get_active_config();
 
@@ -538,16 +554,16 @@ private function maybe_migrate_checkout_urls(): void {
 		$reuse_window = $reuse_window_seconds; // seconds – same window for the merchant_txn_id.
 
 		if ( $force_new || $merchant_txn_id === '' || $initiated_at <= 0 ) {
-			$merchant_txn_id = (string) $order->get_id() . '-' . (string) $now;
+			$merchant_txn_id = $this->new_merchant_transaction_id( $order, $now );
 			$order->update_meta_data( MMGWC_META_MERCHANT_TXN_ID, $merchant_txn_id );
 			$order->update_meta_data( '_mmg_initiated_at', $now );
 		} elseif ( ( $now - $initiated_at ) > $reuse_window ) {
-			$merchant_txn_id = (string) $order->get_id() . '-' . (string) $now;
+			$merchant_txn_id = $this->new_merchant_transaction_id( $order, $now );
 			$order->update_meta_data( MMGWC_META_MERCHANT_TXN_ID, $merchant_txn_id );
 			$order->update_meta_data( '_mmg_initiated_at', $now );
 		}
 
-		$order->update_meta_data( '_mmg_mode', $config['mode'] );
+		$order->update_meta_data( MMGWC_META_MODE, $config['mode'] );
 		$order->save();
 
 		$total = (float) $order->get_total();
@@ -592,6 +608,16 @@ private function maybe_migrate_checkout_urls(): void {
 		} else {
 			$amount = (string) wc_format_decimal( $mmg_total, 2 );
 		}
+
+		// Immutable payment snapshot used by the authenticated callback verifier.
+		$order->update_meta_data( MMGWC_META_EXPECTED_AMOUNT, wc_format_decimal( $mmg_total, 2 ) );
+		$order->update_meta_data( MMGWC_META_EXPECTED_CURRENCY, 'GYD' );
+		$order->update_meta_data( MMGWC_META_EXPECTED_MERCHANT_ID, (string) $config['merchant_id'] );
+		$order->update_meta_data( MMGWC_META_EXPECTED_ORDER_TOTAL, wc_format_decimal( $order->get_total(), 2 ) );
+		$order->update_meta_data( MMGWC_META_EXPECTED_ORDER_CURRENCY, $order_currency );
+		$order->update_meta_data( MMGWC_META_MODE, (string) $config['mode'] );
+		$order->delete_meta_data( MMGWC_META_VERIFICATION_STATUS );
+		$order->save();
 
 		$payload = array(
 			'secretKey' => $config['secret_key'],
@@ -711,76 +737,61 @@ private function maybe_migrate_checkout_urls(): void {
 		if ( ! is_array( $data ) ) {
 			throw new RuntimeException( 'MMG response is not JSON' );
 		}
+		// Internal evidence used by the verifier. Override any provider-supplied
+		// value with the credential mode that actually decrypted the token.
+		$data['_mmgwc_decrypted_mode'] = $succeeded_mode;
 		return $data;
 	}
 
-	private function clear_checkout_session_meta( WC_Order $order ): void {
+	private function clear_checkout_session_meta( WC_Order $order, bool $preserve_verification_snapshot = false ): void {
 		$order->delete_meta_data( '_mmgwc_last_checkout_url' );
 		$order->delete_meta_data( '_mmgwc_last_checkout_url_at' );
 		$order->delete_meta_data( '_mmgwc_last_checkout_url_mode' );
 		$order->delete_meta_data( '_mmg_initiated_at' );
-		$order->delete_meta_data( MMGWC_META_MERCHANT_TXN_ID );
+		if ( ! $preserve_verification_snapshot ) {
+			$order->delete_meta_data( MMGWC_META_MERCHANT_TXN_ID );
+			$order->delete_meta_data( MMGWC_META_EXPECTED_AMOUNT );
+			$order->delete_meta_data( MMGWC_META_EXPECTED_CURRENCY );
+			$order->delete_meta_data( MMGWC_META_EXPECTED_MERCHANT_ID );
+			$order->delete_meta_data( MMGWC_META_EXPECTED_ORDER_TOTAL );
+			$order->delete_meta_data( MMGWC_META_EXPECTED_ORDER_CURRENCY );
+		}
 		$order->save();
 	}
 
 	public function resolve_order_from_mmg_response( array $response ) {
 		$merchant_txn_id = $response['merchantTransactionId'] ?? $response['MerchantTransactionId'] ?? $response['merchantTransactionID'] ?? $response['MerchantTransactionID'] ?? null;
-		if ( is_string( $merchant_txn_id ) && $merchant_txn_id !== '' ) {
-			if ( ctype_digit( $merchant_txn_id ) ) {
-				$order = wc_get_order( (int) $merchant_txn_id );
-				if ( $order ) {
-					return $order;
-				}
-			}
-
-			// Common case: merchantTransactionId stored as "<order_id>-<timestamp>".
-			if ( preg_match( '/^(\d+)[-:_]/', $merchant_txn_id, $m ) ) {
-				$maybe_order_id = (int) $m[1];
-				if ( $maybe_order_id > 0 ) {
-					$order = wc_get_order( $maybe_order_id );
-					if ( $order ) {
-						return $order;
-					}
-				}
-			}
-
-			// Fallback: search by stored meta, restricted to MMG orders.
-			$orders = wc_get_orders(
-				array(
-					'limit'          => 1,
-					'return'         => 'objects',
-					'payment_method' => 'mmg_checkout',
-					'meta_key'       => MMGWC_META_MERCHANT_TXN_ID,
-					'meta_value'     => $merchant_txn_id,
-				)
-			);
-			if ( ! empty( $orders ) ) {
-				return $orders[0];
-			}
+		if ( ! is_string( $merchant_txn_id ) || trim( $merchant_txn_id ) === '' || strlen( $merchant_txn_id ) > 191 ) {
+			return null;
 		}
 
-		return null;
+		// Resolve only through the exact immutable value stored when checkout was
+		// created. Parsing an order ID from attacker-controlled callback text can
+		// attach a forged response to an unrelated order.
+		$orders = wc_get_orders(
+			array(
+				'limit'          => 2,
+				'return'         => 'objects',
+				'payment_method' => 'mmg_checkout',
+				'meta_key'       => MMGWC_META_MERCHANT_TXN_ID,
+				'meta_value'     => trim( $merchant_txn_id ),
+			)
+		);
+		if ( ! is_array( $orders ) || count( $orders ) !== 1 || ! $orders[0] instanceof WC_Order ) {
+			return null;
+		}
+		return $orders[0];
 	}
 
 	public function handle_mmg_response_for_order( WC_Order $order, array $response ): string {
 		$txn_id = $response['transactionId'] ?? $response['TransactionId'] ?? $response['transactionReference'] ?? $response['transactionReceipt'] ?? $response['executionId'] ?? '';
-		$txn_id = is_string( $txn_id ) ? $txn_id : '';
+		$txn_id = is_scalar( $txn_id ) ? trim( (string) $txn_id ) : '';
 
 		$result_code = $response['resultCode'] ?? $response['ResultCode'] ?? $response['transactionStatus'] ?? $response['transactionStatusCode'] ?? '';
 		$result_message = $response['resultMessage'] ?? $response['ResultMessage'] ?? $response['message'] ?? '';
-
-		// Idempotency: if already processed and order is paid, do nothing.
-		$already_processed = (string) $order->get_meta( MMGWC_META_PROCESSED_TXN_ID );
-		$current_txn = (string) $order->get_meta( MMGWC_META_TXN_ID );
-		if ( $txn_id !== '' && ( $already_processed === $txn_id || $current_txn === $txn_id ) && ! $order->needs_payment() ) {
-			MMGWC_Logger::debug( 'MMG callback duplicate, skipping', array( 'order_id' => $order->get_id(), 'txn_id' => $txn_id ) );
-			return $this->get_return_url( $order );
-		}
-
-		$order->update_meta_data( MMGWC_META_TXN_ID, $txn_id );
 		$order->update_meta_data( MMGWC_META_RESULT_CODE, is_scalar( $result_code ) ? (string) $result_code : '' );
 		$order->update_meta_data( MMGWC_META_RESULT_MESSAGE, is_scalar( $result_message ) ? (string) $result_message : '' );
-		$order->update_meta_data( MMGWC_META_RAW_RESPONSE, wp_json_encode( $response ) );
+		$order->update_meta_data( MMGWC_META_RAW_RESPONSE, wp_json_encode( MMGWC_Payment_Verifier::callback_record( $response ) ) );
 		$order->save();
 
 		$rc = is_scalar( $result_code ) ? trim( (string) $result_code ) : '';
@@ -789,27 +800,76 @@ private function maybe_migrate_checkout_urls(): void {
 		$type = $mapping['type'];
 		$rm_text = is_scalar( $result_message ) ? trim( (string) $result_message ) : '';
 
-		// Optional: enrich using Transaction Lookup API.
-		if ( $txn_id !== '' ) {
-			$lookup_data = MMGWC_API::transaction_lookup( $this->get_active_config(), $txn_id );
-			if ( is_array( $lookup_data ) ) {
-				$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( $lookup_data ) );
-				$order->save();
-				MMGWC_Logger::debug( 'MMG transaction lookup stored', array( 'order_id' => $order->get_id(), 'txn_id' => $txn_id ) );
-			}
-		}
-
 		if ( $type === 'success' ) {
-			if ( $order->needs_payment() ) {
-				$order->payment_complete( $txn_id );
+			if ( ! MMGWC_Payment_Verifier::acquire_order_lock( (int) $order->get_id() ) ) {
+				MMGWC_Logger::info( 'MMG payment verification already in progress', array( 'order_id' => $order->get_id() ) );
+				$this->add_customer_notice( 'Your MMG payment verification is already in progress. Please do not pay again.', 'notice' );
+				return $this->get_return_url( $order );
 			}
-			$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $txn_id );
+			try {
+			$order_mode = (string) $order->get_meta( MMGWC_META_MODE );
+			$config = $this->get_config_for_mode( $order_mode );
+			$lookup_data = $txn_id !== '' ? MMGWC_API::transaction_lookup( $config, $txn_id ) : null;
+			$order->update_meta_data( MMGWC_META_LAST_VERIFIED_AT, (string) time() );
+			if ( is_array( $lookup_data ) ) {
+				$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( MMGWC_Payment_Verifier::lookup_record( $lookup_data ) ) );
+			}
 			$order->save();
-			$this->clear_checkout_session_meta( $order );
-			$order->add_order_note( sprintf( 'MMG payment successful. Transaction ID: %s', $txn_id !== '' ? $txn_id : 'N/A' ) );
+
+			$verification = is_array( $lookup_data )
+				? MMGWC_Payment_Verifier::verify_callback( $order, $response, $lookup_data, $config )
+				: array(
+					'valid' => false,
+					'code' => 'lookup_failed',
+					'message' => 'MMG did not return authenticated transaction data.',
+					'transaction_id' => '',
+					'idempotent' => false,
+				);
+
+			if ( ! empty( $verification['valid'] ) ) {
+				$verified_txn_id = (string) $verification['transaction_id'];
+				$order->update_meta_data( MMGWC_META_TXN_ID, $verified_txn_id );
+				$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $verified_txn_id );
+				$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified' );
+				$order->save();
+				if ( $order->needs_payment() ) {
+					$order->payment_complete( $verified_txn_id );
+				}
+				$this->clear_checkout_session_meta( $order, true );
+				if ( empty( $verification['idempotent'] ) ) {
+					$order->add_order_note( sprintf( 'MMG payment authenticated and verified. Transaction ID: %s', $verified_txn_id ) );
+				}
+				return $this->get_return_url( $order );
+			}
+
+			$failure_code = isset( $verification['code'] ) ? sanitize_key( (string) $verification['code'] ) : 'verification_failed';
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'failed:' . $failure_code );
+			$order->save();
+			$order->add_order_note( 'MMG callback reported success but authenticated verification failed: ' . $failure_code . '. The order was not marked as paid.' );
+			MMGWC_Logger::error( 'MMG payment verification failed', array( 'order_id' => $order->get_id(), 'reason' => $failure_code ) );
+			$this->add_customer_notice( 'Your MMG payment is awaiting verification. Please do not pay again. The store will review the transaction.', 'notice' );
 			return $this->get_return_url( $order );
+			} finally {
+				MMGWC_Payment_Verifier::release_order_lock( (int) $order->get_id() );
+			}
 		}
 
+		$stored_merchant_transaction_id = (string) $order->get_meta( MMGWC_META_MERCHANT_TXN_ID );
+		$response_merchant_transaction_id = $response['merchantTransactionId'] ?? $response['MerchantTransactionId'] ?? $response['merchantTransactionID'] ?? $response['MerchantTransactionID'] ?? '';
+		$response_merchant_transaction_id = is_scalar( $response_merchant_transaction_id ) ? trim( (string) $response_merchant_transaction_id ) : '';
+		$decrypted_mode = isset( $response['_mmgwc_decrypted_mode'] ) && is_scalar( $response['_mmgwc_decrypted_mode'] ) ? trim( (string) $response['_mmgwc_decrypted_mode'] ) : '';
+		$order_mode = (string) $order->get_meta( MMGWC_META_MODE );
+		if ( $stored_merchant_transaction_id === '' || $response_merchant_transaction_id === '' || ! hash_equals( $stored_merchant_transaction_id, $response_merchant_transaction_id ) || $decrypted_mode !== $order_mode ) {
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'failed:callback_correlation' );
+			$order->save();
+			$order->add_order_note( 'MMG callback was rejected because its order correlation or credential mode did not match.' );
+			$this->add_customer_notice( 'The MMG response could not be verified. Please contact the store before trying again.', 'error' );
+			return $order->get_checkout_payment_url( true );
+		}
+
+		if ( preg_match( '/^\d{1,64}$/', $txn_id ) === 1 ) {
+			$order->update_meta_data( MMGWC_META_TXN_ID, $txn_id );
+		}
 		$details = $rm_text !== '' ? $rm_text : $label;
 		if ( $type === 'cancelled' ) {
 			$cancel_status = MMGWC_Settings::get( 'status_cancelled', 'cancelled' );

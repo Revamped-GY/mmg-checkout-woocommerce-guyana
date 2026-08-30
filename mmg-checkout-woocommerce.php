@@ -3,7 +3,7 @@
  * Plugin Name: MMG Checkout for WooCommerce
  * Plugin URI: https://revamped.gy/mmg-woocommerce-plugin-guyana
  * Description: Accept MMG payments in WooCommerce (Classic and Block Checkout). Includes Importer, Diagnostics, Exports, Payment Requests, Subscriptions, Support Bundle, and admin tools. Configure via WP Admin → MMG Checkout.
- * Version: 2.14.21
+ * Version: 2.15.0
  * Author: Revamped GY
  * Author URI: https://revamped.gy
  * Text Domain: mmg-checkout-woocommerce
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MMGWC_VERSION', '2.14.21' );
+define( 'MMGWC_VERSION', '2.15.0' );
 define( 'MMGWC_PLUGIN_FILE', __FILE__ );
 define( 'MMGWC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MMGWC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -49,6 +49,13 @@ define( 'MMGWC_META_RAW_RESPONSE', '_mmg_raw_response' );
 
 define( 'MMGWC_META_PROCESSED_TXN_ID', '_mmg_processed_transaction_id' );
 define( 'MMGWC_META_LAST_VERIFIED_AT', '_mmg_last_verified_at' );
+define( 'MMGWC_META_MODE', '_mmg_mode' );
+define( 'MMGWC_META_EXPECTED_AMOUNT', '_mmg_expected_amount_gyd' );
+define( 'MMGWC_META_EXPECTED_CURRENCY', '_mmg_expected_currency' );
+define( 'MMGWC_META_EXPECTED_MERCHANT_ID', '_mmg_expected_merchant_id' );
+define( 'MMGWC_META_EXPECTED_ORDER_TOTAL', '_mmg_expected_order_total' );
+define( 'MMGWC_META_EXPECTED_ORDER_CURRENCY', '_mmg_expected_order_currency' );
+define( 'MMGWC_META_VERIFICATION_STATUS', '_mmg_verification_status' );
 
 // Currency conversion metadata.
 define( 'MMGWC_META_ORIGINAL_CURRENCY', '_mmg_original_currency' );
@@ -178,6 +185,7 @@ add_action( 'plugins_loaded', function() {
 	}
 
 	require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-api.php';
+	require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-payment-verifier.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/class-wc-gateway-mmgwc.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/admin/class-mmgwc-admin.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/admin/class-mmgwc-admin-ui.php';

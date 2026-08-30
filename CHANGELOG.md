@@ -2,6 +2,23 @@
 
 All notable changes to MMG Checkout for WooCommerce are recorded here. The format follows Keep a Changelog and the project follows Semantic Versioning.
 
+## [2.15.0] - 2026-08-30
+
+### Security
+
+- Requires an authenticated MMG Transaction Lookup before a browser callback can mark an order paid.
+- Verifies the exact stored merchant transaction ID, provider transaction ID, immutable amount, GYD currency, credited merchant, credential mode, order total, order currency and payment state.
+- Rejects provider transaction IDs already attached to another order while keeping repeat callbacks for the same verified order idempotent.
+- Removes order resolution by numeric prefix. Callbacks resolve only through an exact stored merchant transaction ID.
+- Generates merchant transaction IDs with 128 bits of randomness instead of an order ID and timestamp alone.
+- Applies the same authenticated invariants to the administrator Verify payment tool.
+
+### Changed
+
+- Hides MMG from checkout until all authenticated Transaction Lookup credentials are configured.
+- Stores allow-listed callback and lookup summaries instead of full provider payloads. Customer wallet party data and provider HTML are excluded.
+- Keeps the immutable verification snapshot after a successful payment for audit and replay protection.
+
 ## [2.14.21] - 2026-05-03
 
 ### Changed

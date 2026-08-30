@@ -15,7 +15,7 @@ final class MMGWC_API {
 		$username = trim( $config['wss_mid'] ?? '' );
 		$password = trim( $config['password'] ?? '' );
 
-		if ( $base === '' || $api_key === '' || $username === '' || $password === '' ) {
+		if ( $base === '' || $api_key === '' || $username === '' || $password === '' || ! self::is_valid_base_url( $base ) ) {
 			return null;
 		}
 
@@ -59,9 +59,9 @@ final class MMGWC_API {
 	}
 
 	/**
-	 * Transaction lookup (Merchant Initiated API).
+	 * Authenticated transaction lookup (Merchant Initiated API).
 	 *
-	 * This is optional and is mainly used to enrich order notes/admin screens.
+	 * A successful lookup is required before an order can be marked as paid.
 	 */
 	public static function transaction_lookup( array $config, string $transaction_id ) {
 		$base = trim( $config['mwallet_base_url'] ?? '' );
@@ -70,7 +70,7 @@ final class MMGWC_API {
 		$wss_mkey = trim( $config['wss_mkey'] ?? '' );
 		$wss_msecret = trim( $config['wss_msecret'] ?? '' );
 
-		if ( $base === '' || $api_key === '' || $wss_mid === '' || $wss_mkey === '' || $wss_msecret === '' || $transaction_id === '' ) {
+		if ( $base === '' || $api_key === '' || $wss_mid === '' || $wss_mkey === '' || $wss_msecret === '' || preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 || ! self::is_valid_base_url( $base ) ) {
 			return null;
 		}
 
@@ -118,5 +118,14 @@ final class MMGWC_API {
 
 		$data = json_decode( $body, true );
 		return is_array( $data ) ? $data : null;
+	}
+
+	private static function is_valid_base_url( string $base ): bool {
+		$parts = wp_parse_url( $base );
+		if ( ! is_array( $parts ) || strtolower( (string) ( $parts['scheme'] ?? '' ) ) !== 'https' || empty( $parts['host'] ) ) {
+			MMGWC_Logger::warning( 'MMG API base URL must be a valid HTTPS URL.' );
+			return false;
+		}
+		return true;
 	}
 }

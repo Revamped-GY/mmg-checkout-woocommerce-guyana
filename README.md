@@ -64,6 +64,8 @@ For invoice-style billing use **MMG Checkout → Payment Requests** to create a 
 
 From version 2.14.21 onward updates are delivered through this repository's GitHub Releases. The plugin checks for the latest release every six hours, verifies the download is a `.zip` asset on a github.com host and applies the update through the standard WordPress upgrader. An optional SHA-256 sidecar file (`<filename>.zip.sha256`) attached to the release is verified before install.
 
+From version 2.15.0, MMG Checkout requires the Merchant Initiated API credentials for authenticated Transaction Lookup. The payment method stays unavailable until those credentials are complete. A browser callback is treated as correlation data and an order is marked paid only after MMG confirms the transaction ID, amount, GYD currency, merchant and completed status.
+
 If you need to point the updater somewhere else, the GitHub repository can be filtered:
 
 ```php

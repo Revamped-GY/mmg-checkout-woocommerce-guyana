@@ -8,6 +8,7 @@ final class MMGWC_Admin {
 	public static function init(): void {
 		// Admin notices should always run for admins.
 		add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
+		add_action( 'admin_notices', array( __CLASS__, 'configuration_notice' ) );
 
 		// Order tools (verify payment, resend link) can be disabled by Feature Manager.
 		if ( class_exists( 'MMGWC_Features' ) && ! MMGWC_Features::is_enabled( 'order_tools' ) ) {
@@ -67,7 +68,7 @@ final class MMGWC_Admin {
 
 		echo '<p style="margin:0">';
 		echo '<button type="submit" id="mmgwc-verify-button" class="button">Verify payment</button>';
-		echo ' <span class="description">Uses MMG Transaction Lookup API if configured in MMG settings.</span>';
+		echo ' <span class="description">Requires MMG Transaction Lookup API credentials and verifies transaction ID, amount, currency, merchant and status.</span>';
 		echo '</p>';
 		echo '<div id="mmgwc-verify-result" class="mmgwc-verify-result" style="margin-top:8px;"></div>';
 		echo '</form>';
@@ -172,8 +173,8 @@ final class MMGWC_Admin {
 
 		$txn_id = isset( $_POST['txn_id'] ) ? sanitize_text_field( wp_unslash( $_POST['txn_id'] ) ) : '';
 		$txn_id = trim( $txn_id );
-		if ( $txn_id === '' ) {
-			wp_send_json_error( array( 'message' => 'Missing Transaction ID.' ), 400 );
+		if ( preg_match( '/^\d{1,64}$/', $txn_id ) !== 1 ) {
+			wp_send_json_error( array( 'message' => 'Enter a valid numeric MMG Transaction ID.' ), 400 );
 		}
 
 		$mode = (string) $order->get_meta( '_mmg_mode' );
@@ -190,7 +191,7 @@ final class MMGWC_Admin {
 		$lookup = MMGWC_API::transaction_lookup( $config, $txn_id );
 		$order->update_meta_data( MMGWC_META_LAST_VERIFIED_AT, (string) time() );
 		if ( is_array( $lookup ) ) {
-			$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( $lookup ) );
+			$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( MMGWC_Payment_Verifier::lookup_record( $lookup ) ) );
 		}
 		$order->save();
 
@@ -199,44 +200,43 @@ final class MMGWC_Admin {
 			wp_send_json_error( array( 'message' => 'MMG verification failed. Check WooCommerce logs for more details.' ), 502 );
 		}
 
-		$paid = self::is_lookup_paid( $lookup );
+		$verification = MMGWC_Payment_Verifier::verify_lookup_for_order( $order, $txn_id, $lookup, $config );
 		$summary = self::lookup_summary( $lookup );
-		$order->add_order_note( 'MMG verification result: ' . $summary );
+		$order->add_order_note( 'MMG authenticated lookup result: ' . $summary );
+
+		if ( empty( $verification['valid'] ) ) {
+			$reason = isset( $verification['code'] ) ? sanitize_key( (string) $verification['code'] ) : 'verification_failed';
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'failed:' . $reason );
+			$order->save();
+			$order->add_order_note( 'MMG verification rejected the transaction: ' . $reason . '. The order was not marked as paid.' );
+			wp_send_json_error( array(
+				'message' => 'MMG returned a transaction, but it did not match this order: ' . $reason . '.',
+				'summary' => $summary,
+			), 409 );
+		}
 
 		$updated = false;
-		if ( $paid && $order->needs_payment() ) {
-			$order->payment_complete( $txn_id );
+		if ( $order->needs_payment() ) {
+			$order->update_meta_data( MMGWC_META_TXN_ID, $txn_id );
 			$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $txn_id );
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified' );
 			$order->save();
+			$order->payment_complete( $txn_id );
 			$updated = true;
 		}
 
 		wp_send_json_success( array(
-			'paid' => $paid,
+			'paid' => true,
 			'orderStatus' => $order->get_status(),
 			'updated' => $updated,
 			'summary' => $summary,
-			'message' => $paid ? ( $updated ? 'Payment verified and order updated.' : 'Payment verified. Order was already marked as paid.' ) : 'Payment not marked as successful in lookup. See the order note for details.',
+			'message' => $updated ? 'Payment verified and order updated.' : 'Payment verified. Order was already marked as paid.',
 			'reload' => true,
 		) );
 	}
 
 	private static function missing_initiated_api_fields( array $config ): array {
-		$missing = array();
-		$map = array(
-			'mwallet_base_url' => 'mwallet_base_url',
-			'api_key' => 'api_key',
-			'wss_mid' => 'wss_mid',
-			'wss_mkey' => 'wss_mkey',
-			'wss_msecret' => 'wss_msecret',
-			'password' => 'password',
-		);
-		foreach ( $map as $k => $label ) {
-			if ( empty( $config[ $k ] ) ) {
-				$missing[] = $label;
-			}
-		}
-		return $missing;
+		return MMGWC_Payment_Verifier::missing_api_fields( $config );
 	}
 
 	public static function handle_verify_payment(): void {
@@ -265,8 +265,9 @@ final class MMGWC_Admin {
 		}
 
 		$txn_id = isset( $_POST['txn_id'] ) ? sanitize_text_field( wp_unslash( $_POST['txn_id'] ) ) : '';
-		if ( $txn_id === '' ) {
-			self::redirect_with_notice( $order_id, 'error', 'Missing Transaction ID.' );
+		$txn_id = trim( $txn_id );
+		if ( preg_match( '/^\d{1,64}$/', $txn_id ) !== 1 ) {
+			self::redirect_with_notice( $order_id, 'error', 'Enter a valid numeric MMG Transaction ID.' );
 			return;
 		}
 
@@ -287,7 +288,7 @@ final class MMGWC_Admin {
 		$lookup = MMGWC_API::transaction_lookup( $config, $txn_id );
 		$order->update_meta_data( MMGWC_META_LAST_VERIFIED_AT, (string) time() );
 		if ( is_array( $lookup ) ) {
-			$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( $lookup ) );
+			$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( MMGWC_Payment_Verifier::lookup_record( $lookup ) ) );
 		}
 		$order->save();
 
@@ -297,24 +298,30 @@ final class MMGWC_Admin {
 			return;
 		}
 
-		$paid = self::is_lookup_paid( $lookup );
+		$verification = MMGWC_Payment_Verifier::verify_lookup_for_order( $order, $txn_id, $lookup, $config );
 		$summary = self::lookup_summary( $lookup );
-		$order->add_order_note( 'MMG verification result: ' . $summary );
+		$order->add_order_note( 'MMG authenticated lookup result: ' . $summary );
 
-		if ( $paid && $order->needs_payment() ) {
-			$order->payment_complete( $txn_id );
-			$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $txn_id );
+		if ( empty( $verification['valid'] ) ) {
+			$reason = isset( $verification['code'] ) ? sanitize_key( (string) $verification['code'] ) : 'verification_failed';
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'failed:' . $reason );
 			$order->save();
+			$order->add_order_note( 'MMG verification rejected the transaction: ' . $reason . '. The order was not marked as paid.' );
+			self::redirect_with_notice( $order_id, 'error', 'MMG returned a transaction, but it did not match this order: ' . $reason . '.' );
+			return;
+		}
+
+		if ( $order->needs_payment() ) {
+			$order->update_meta_data( MMGWC_META_TXN_ID, $txn_id );
+			$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $txn_id );
+			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified' );
+			$order->save();
+			$order->payment_complete( $txn_id );
 			self::redirect_with_notice( $order_id, 'success', 'Payment verified and order updated.' );
 			return;
 		}
 
-		if ( $paid ) {
-			self::redirect_with_notice( $order_id, 'success', 'Payment verified. Order was already marked as paid.' );
-			return;
-		}
-
-		self::redirect_with_notice( $order_id, 'notice', 'Payment not marked as successful in lookup. See the order note for details.' );
+		self::redirect_with_notice( $order_id, 'success', 'Payment verified. Order was already marked as paid.' );
 	}
 
 	public static function handle_resend_payment(): void {
@@ -423,42 +430,6 @@ final class MMGWC_Admin {
 		return (bool) wp_mail( $email, $subject, $body, $headers );
 	}
 
-	private static function is_lookup_paid( array $lookup ): bool {
-		// Authoritative status-like fields only.
-		$status_fields = array(
-			$lookup['status'] ?? null,
-			$lookup['transactionStatus'] ?? null,
-			$lookup['transaction_status'] ?? null,
-		);
-		foreach ( $status_fields as $v ) {
-			if ( is_string( $v ) ) {
-				$vv = strtolower( trim( $v ) );
-				if ( in_array( $vv, array( 'success', 'successful', 'completed', 'paid', 'approved' ), true ) ) {
-					return true;
-				}
-			}
-		}
-
-		// resultCode == 0 is MMG's success code in the checkout response shape.
-		foreach ( array( 'resultCode', 'result_code' ) as $rk ) {
-			if ( array_key_exists( $rk, $lookup ) ) {
-				$v = $lookup[ $rk ];
-				if ( is_string( $v ) || is_numeric( $v ) ) {
-					if ( trim( (string) $v ) === '0' ) {
-						return true;
-					}
-				}
-			}
-		}
-
-		// Boolean "successful": only trust an explicit true.
-		if ( array_key_exists( 'successful', $lookup ) && $lookup['successful'] === true ) {
-			return true;
-		}
-
-		return false;
-	}
-
 	private static function lookup_summary( array $lookup ): string {
 		$fields = array();
 		foreach ( array( 'transactionId', 'transaction_id', 'amount', 'currency', 'status', 'transactionStatus', 'resultCode', 'message' ) as $key ) {
@@ -494,6 +465,19 @@ final class MMGWC_Admin {
 			return $edit_link;
 		}
 		return admin_url( 'admin.php?page=wc-orders&action=edit&id=' . $order_id );
+	}
+
+	public static function configuration_notice(): void {
+		if ( ! current_user_can( 'manage_woocommerce' ) || MMGWC_Settings::get( 'enabled', 'no' ) !== 'yes' ) {
+			return;
+		}
+		$mode = MMGWC_Settings::get_mode();
+		$config = MMGWC_Settings::get_config( $mode );
+		$missing = MMGWC_Payment_Verifier::missing_api_fields( $config );
+		if ( empty( $missing ) ) {
+			return;
+		}
+		echo '<div class="notice notice-error"><p><strong>MMG Checkout is unavailable to customers.</strong> Authenticated Transaction Lookup is required before an order can be marked paid. Complete these MMG settings: ' . esc_html( implode( ', ', $missing ) ) . '.</p></div>';
 	}
 
 	public static function admin_notices(): void {
