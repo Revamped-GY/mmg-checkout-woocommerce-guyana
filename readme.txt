@@ -103,6 +103,7 @@ Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re imp
 * Split API credentials by Sandbox and Live mode and updated the public UAT API base path.
 * Fixed the GitHub repository and moved package verification before installation.
 * Added a one-time verified legacy manifest bridge for existing released installations.
+* Preserved authenticated callbacks for hosted checkouts started before the 2.16.0 update.
 * Added automatic versioned releases for main-branch version updates.
 * Added guidance for the confirmed Login and QR switching race on MMG's hosted page.
 * Required exact release asset names and verified package hashes after all update-download filters run.

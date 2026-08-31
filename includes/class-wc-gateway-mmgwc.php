@@ -922,12 +922,33 @@ private function maybe_migrate_checkout_urls(): void {
 		return self::HOSTED_SESSION_PREFIX . hash( 'sha256', $merchant_transaction_id );
 	}
 
+	private static function is_valid_hosted_session_context( array $session, string $expected_transaction_id = '' ): bool {
+		if ( (int) ( $session['version'] ?? 0 ) !== 1 || (int) ( $session['order_id'] ?? 0 ) <= 0 ) {
+			return false;
+		}
+		$stored_id = isset( $session['merchant_transaction_id'] ) && is_string( $session['merchant_transaction_id'] )
+			? trim( $session['merchant_transaction_id'] )
+			: '';
+		if ( $stored_id === '' || strlen( $stored_id ) > 191 || ( $expected_transaction_id !== '' && ! hash_equals( $stored_id, $expected_transaction_id ) ) ) {
+			return false;
+		}
+		if ( ! in_array( (string) ( $session['mode'] ?? '' ), array( 'sandbox', 'live' ), true ) ) {
+			return false;
+		}
+		foreach ( array( 'expected_amount', 'expected_currency', 'expected_merchant_id', 'expected_order_total', 'expected_order_currency' ) as $key ) {
+			if ( ! isset( $session[ $key ] ) || ! is_scalar( $session[ $key ] ) || trim( (string) $session[ $key ] ) === '' ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	private function reserve_hosted_session_context( array $session ): array {
 		$merchant_transaction_id = isset( $session['merchant_transaction_id'] ) && is_string( $session['merchant_transaction_id'] )
 			? trim( $session['merchant_transaction_id'] )
 			: '';
 		$value = wp_json_encode( $session, JSON_UNESCAPED_SLASHES );
-		if ( $merchant_transaction_id === '' || ! is_string( $value ) || strlen( $value ) > 4096 ) {
+		if ( ! self::is_valid_hosted_session_context( $session, $merchant_transaction_id ) || ! is_string( $value ) || strlen( $value ) > 4096 ) {
 			throw new RuntimeException( 'The MMG checkout session context could not be created.' );
 		}
 		$key = self::hosted_session_key( $merchant_transaction_id );
@@ -947,20 +968,8 @@ private function maybe_migrate_checkout_urls(): void {
 			return null;
 		}
 		$session = json_decode( $value, true );
-		if ( ! is_array( $session ) || (int) ( $session['version'] ?? 0 ) !== 1 || (int) ( $session['order_id'] ?? 0 ) <= 0 ) {
+		if ( ! is_array( $session ) || ! self::is_valid_hosted_session_context( $session, $merchant_transaction_id ) ) {
 			return null;
-		}
-		$stored_id = isset( $session['merchant_transaction_id'] ) && is_string( $session['merchant_transaction_id'] ) ? trim( $session['merchant_transaction_id'] ) : '';
-		if ( $stored_id === '' || ! hash_equals( $stored_id, $merchant_transaction_id ) ) {
-			return null;
-		}
-		if ( ! in_array( (string) ( $session['mode'] ?? '' ), array( 'sandbox', 'live' ), true ) ) {
-			return null;
-		}
-		foreach ( array( 'expected_amount', 'expected_currency', 'expected_merchant_id', 'expected_order_total', 'expected_order_currency' ) as $key ) {
-			if ( ! isset( $session[ $key ] ) || ! is_scalar( $session[ $key ] ) || trim( (string) $session[ $key ] ) === '' ) {
-				return null;
-			}
 		}
 		return $session;
 	}
@@ -1249,6 +1258,12 @@ private function maybe_migrate_checkout_urls(): void {
 		}
 		$session = self::hosted_session_context( $merchant_txn_id );
 		if ( ! is_array( $session ) ) {
+			$decrypted_mode = isset( $response['_mmgwc_decrypted_mode'] ) && is_scalar( $response['_mmgwc_decrypted_mode'] )
+				? trim( (string) $response['_mmgwc_decrypted_mode'] )
+				: '';
+			if ( ! in_array( $decrypted_mode, array( 'sandbox', 'live' ), true ) ) {
+				return null;
+			}
 			// Preserve a checkout page created immediately before this version was
 			// installed. The fallback still requires one exact current-meta match and
 			// converts that legacy snapshot into the new immutable reservation.
@@ -1265,25 +1280,28 @@ private function maybe_migrate_checkout_urls(): void {
 				return null;
 			}
 			$legacy_order = $orders[0];
-			$session = array(
-				'version' => 1,
-				'order_id' => (int) $legacy_order->get_id(),
-				'merchant_transaction_id' => $merchant_txn_id,
-				'created_at' => (int) $legacy_order->get_meta( '_mmg_initiated_at' ),
-				'mode' => (string) $legacy_order->get_meta( MMGWC_META_MODE ),
-				'expected_amount' => (string) $legacy_order->get_meta( MMGWC_META_EXPECTED_AMOUNT ),
-				'expected_currency' => (string) $legacy_order->get_meta( MMGWC_META_EXPECTED_CURRENCY ),
-				'expected_merchant_id' => (string) $legacy_order->get_meta( MMGWC_META_EXPECTED_MERCHANT_ID ),
-				'expected_order_total' => (string) $legacy_order->get_meta( MMGWC_META_EXPECTED_ORDER_TOTAL ),
-				'expected_order_currency' => (string) $legacy_order->get_meta( MMGWC_META_EXPECTED_ORDER_CURRENCY ),
-			);
+			$session = MMGWC_Payment_Context::legacy_hosted_snapshot( $legacy_order, $merchant_txn_id );
+			if ( ! is_array( $session ) ) {
+				return null;
+			}
+			$legacy_mode = (string) $session['mode'];
+			$config = $this->get_config_for_mode( $legacy_mode );
+			$config_merchant_id = isset( $config['merchant_id'] ) && is_scalar( $config['merchant_id'] ) ? trim( (string) $config['merchant_id'] ) : '';
+			if (
+				! hash_equals( $legacy_mode, $decrypted_mode )
+				|| $config_merchant_id === ''
+				|| ! hash_equals( (string) $session['expected_merchant_id'], $config_merchant_id )
+			) {
+				return null;
+			}
 			try {
 				$this->reserve_hosted_session_context( $session );
 			} catch ( Throwable $exception ) {
-				$session = self::hosted_session_context( $merchant_txn_id );
-				if ( ! is_array( $session ) ) {
-					return null;
-				}
+				// A concurrent callback may have created the same immutable context.
+			}
+			$session = self::hosted_session_context( $merchant_txn_id );
+			if ( ! is_array( $session ) ) {
+				return null;
 			}
 		}
 

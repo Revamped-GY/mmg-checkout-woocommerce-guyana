@@ -127,6 +127,102 @@ final class MMGWC_Payment_Context {
 		return strpos( $status, 'wc-' ) === 0 ? substr( $status, 3 ) : $status;
 	}
 
+	/**
+	 * Reconstruct the immutable verification snapshot for a hosted checkout
+	 * created before version 2.16.0 began reserving one at redirect time.
+	 *
+	 * The legacy plugin retained the exact merchant transaction ID, credential
+	 * mode, checkout URL and conversion evidence. The merchant ID is recovered
+	 * from that stored URL. Converted amounts are recovered from the stored FX
+	 * metadata. A GYD order uses its current total because the legacy plugin did
+	 * not store a separate GYD amount. Authenticated lookup and the normal final
+	 * order-state check still have to match every returned field.
+	 */
+	public static function legacy_hosted_snapshot( WC_Order $order, string $merchant_transaction_id ): ?array {
+		$merchant_transaction_id = trim( $merchant_transaction_id );
+		$stored_transaction_id = trim( (string) $order->get_meta( MMGWC_META_MERCHANT_TXN_ID ) );
+		if (
+			$merchant_transaction_id === ''
+			|| strlen( $merchant_transaction_id ) > 191
+			|| $stored_transaction_id === ''
+			|| ! hash_equals( $stored_transaction_id, $merchant_transaction_id )
+			|| $order->get_payment_method() !== 'mmg_checkout'
+		) {
+			return null;
+		}
+
+		$mode = trim( (string) $order->get_meta( MMGWC_META_MODE ) );
+		$last_mode = trim( (string) $order->get_meta( '_mmgwc_last_checkout_url_mode' ) );
+		$initiated_at = (int) $order->get_meta( '_mmg_initiated_at' );
+		$last_url_at = (int) $order->get_meta( '_mmgwc_last_checkout_url_at' );
+		$checkout_url = trim( (string) $order->get_meta( '_mmgwc_last_checkout_url' ) );
+		$legacy_transaction_id = (string) $order->get_id() . '-' . (string) $initiated_at;
+		if (
+			! in_array( $mode, array( 'sandbox', 'live' ), true )
+			|| $last_mode !== $mode
+			|| $initiated_at <= 0
+			|| ! hash_equals( $legacy_transaction_id, $merchant_transaction_id )
+			|| $last_url_at < $initiated_at
+			|| $checkout_url === ''
+		) {
+			return null;
+		}
+
+		$url_parts = wp_parse_url( $checkout_url );
+		if ( ! is_array( $url_parts ) || ! isset( $url_parts['query'] ) || ! is_string( $url_parts['query'] ) ) {
+			return null;
+		}
+		$query = array();
+		wp_parse_str( $url_parts['query'], $query );
+		$merchant_id = $query['merchantId'] ?? '';
+		if ( ! is_scalar( $merchant_id ) ) {
+			return null;
+		}
+		$merchant_id = trim( (string) $merchant_id );
+		if ( $merchant_id === '' || strlen( $merchant_id ) > 191 ) {
+			return null;
+		}
+
+		$order_currency = strtoupper( trim( (string) $order->get_currency() ) );
+		$order_total = wc_format_decimal( $order->get_total(), 2 );
+		$original_currency = strtoupper( trim( (string) $order->get_meta( MMGWC_META_ORIGINAL_CURRENCY ) ) );
+		$original_total = trim( (string) $order->get_meta( MMGWC_META_ORIGINAL_TOTAL ) );
+		$converted_amount = trim( (string) $order->get_meta( MMGWC_META_MMG_AMOUNT_GYD ) );
+
+		if ( $original_currency !== '' && $original_currency !== 'GYD' ) {
+			if ( ! is_numeric( $original_total ) || (float) $original_total <= 0 || ! is_numeric( $converted_amount ) || (float) $converted_amount <= 0 ) {
+				return null;
+			}
+			$expected_order_total = wc_format_decimal( $original_total, 2 );
+			$expected_order_currency = $original_currency;
+			$expected_amount = wc_format_decimal( $converted_amount, 2 );
+			if ( ! hash_equals( $expected_order_currency, $order_currency ) || ! hash_equals( $expected_order_total, $order_total ) ) {
+				return null;
+			}
+		} else {
+			if ( $order_currency !== 'GYD' || ! is_numeric( $order_total ) || (float) $order_total <= 0 ) {
+				return null;
+			}
+			$expected_order_total = $order_total;
+			$expected_order_currency = 'GYD';
+			$expected_amount = $order_total;
+		}
+
+		return array(
+			'version' => 1,
+			'order_id' => (int) $order->get_id(),
+			'merchant_transaction_id' => $merchant_transaction_id,
+			'created_at' => $initiated_at,
+			'mode' => $mode,
+			'expected_amount' => $expected_amount,
+			'expected_currency' => 'GYD',
+			'expected_merchant_id' => $merchant_id,
+			'expected_order_total' => $expected_order_total,
+			'expected_order_currency' => $expected_order_currency,
+			'legacy_checkout' => true,
+		);
+	}
+
 	public static function prepare( WC_Order $order, array $config, string $expected_merchant_id, bool $persist = true ): array {
 		$total = (float) $order->get_total();
 		$order_currency = strtoupper( (string) $order->get_currency() );

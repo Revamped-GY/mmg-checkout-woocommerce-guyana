@@ -17,6 +17,7 @@ All notable changes to MMG Checkout for WooCommerce are recorded here. The forma
 
 - Corrected the GitHub update repository and moved SHA-256 verification before package installation.
 - Added a one-time verified legacy manifest bridge so existing released installations can discover 2.16.0.
+- Preserved authenticated callbacks for hosted checkouts started before the 2.16.0 update.
 - Split API credentials by Sandbox and Live mode and corrected the published UAT API base path.
 - Added safe retry guidance for MMG's hosted Login and QR switching race.
 
