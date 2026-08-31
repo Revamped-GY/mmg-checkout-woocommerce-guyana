@@ -3,7 +3,7 @@
  * Plugin Name: MMG Checkout for WooCommerce
  * Plugin URI: https://revamped.gy/mmg-woocommerce-plugin-guyana
  * Description: Accept MMG payments in WooCommerce (Classic and Block Checkout). Includes Importer, Diagnostics, Exports, Payment Requests, Subscriptions, Support Bundle, and admin tools. Configure via WP Admin → MMG Checkout.
- * Version: 2.14.21
+ * Version: 2.16.0
  * Author: Revamped GY
  * Author URI: https://revamped.gy
  * Text Domain: mmg-checkout-woocommerce
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'MMGWC_VERSION', '2.14.21' );
+define( 'MMGWC_VERSION', '2.16.0' );
 define( 'MMGWC_PLUGIN_FILE', __FILE__ );
 define( 'MMGWC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'MMGWC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -32,7 +32,7 @@ define( 'MMGWC_GATEWAY_ICON_URL', MMGWC_PLUGIN_URL . 'assets/images/mmg-logo.web
 // GitHub repository that hosts plugin releases. The updater reads the "latest release"
 // from this repository to discover new versions and download the attached ZIP asset.
 // Filterable via `mmgwc_github_repo` if the repo is ever moved or forked.
-define( 'MMGWC_GITHUB_REPO', 'revamped-gy/mmg-checkout-woocommerce' );
+define( 'MMGWC_GITHUB_REPO', 'Revamped-GY/MMG-Checkout-Woocommerce-Guyana' );
 
 // Legacy JSON manifest. The updater falls back to this only if the GitHub Releases
 // check fails (network error, rate limit, repo unavailable). Existing installs that
@@ -49,6 +49,22 @@ define( 'MMGWC_META_RAW_RESPONSE', '_mmg_raw_response' );
 
 define( 'MMGWC_META_PROCESSED_TXN_ID', '_mmg_processed_transaction_id' );
 define( 'MMGWC_META_LAST_VERIFIED_AT', '_mmg_last_verified_at' );
+define( 'MMGWC_META_MODE', '_mmg_mode' );
+define( 'MMGWC_META_EXPECTED_AMOUNT', '_mmg_expected_amount_gyd' );
+define( 'MMGWC_META_EXPECTED_CURRENCY', '_mmg_expected_currency' );
+define( 'MMGWC_META_EXPECTED_MERCHANT_ID', '_mmg_expected_merchant_id' );
+define( 'MMGWC_META_EXPECTED_ORDER_TOTAL', '_mmg_expected_order_total' );
+define( 'MMGWC_META_EXPECTED_ORDER_CURRENCY', '_mmg_expected_order_currency' );
+define( 'MMGWC_META_VERIFICATION_STATUS', '_mmg_verification_status' );
+
+define( 'MMGWC_META_INITIATED_REFERENCE', '_mmg_initiated_reference' );
+define( 'MMGWC_META_INITIATED_STATUS', '_mmg_initiated_status' );
+define( 'MMGWC_META_INITIATED_EXPIRES_AT', '_mmg_initiated_expires_at' );
+define( 'MMGWC_META_INITIATED_LAST_CHECK', '_mmg_initiated_last_check' );
+define( 'MMGWC_META_INITIATED_ATTEMPTS', '_mmg_initiated_attempts' );
+define( 'MMGWC_META_INITIATED_CUSTOMER_HINT', '_mmg_initiated_customer_hint' );
+define( 'MMGWC_META_INITIATED_CORRELATION', '_mmg_initiated_correlation_id' );
+define( 'MMGWC_META_REVIEW_TXN_ID', '_mmg_review_transaction_id' );
 
 // Currency conversion metadata.
 define( 'MMGWC_META_ORIGINAL_CURRENCY', '_mmg_original_currency' );
@@ -90,16 +106,19 @@ add_action( 'before_woocommerce_init', function() {
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-features.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-secure-store.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-settings.php';
+require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-atomic-option.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-logger.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-crypto.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-qr-generator.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-fx.php';
+require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-payment-context.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-callback.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-rewrites.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-maintenance.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-checkout-compat.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-updater.php';
 require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-subscriptions.php';
+require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-initiated-payments.php';
 
 MMGWC_Rewrites::init();
 MMGWC_Callback::init();
@@ -123,10 +142,12 @@ register_activation_hook( __FILE__, array( 'MMGWC_Rewrites', 'activate' ) );
 register_activation_hook( __FILE__, array( 'MMGWC_Maintenance', 'activate' ) );
 register_activation_hook( __FILE__, array( 'MMGWC_Subscriptions', 'activate' ) );
 register_activation_hook( __FILE__, array( 'MMGWC_Features', 'activate' ) );
+register_activation_hook( __FILE__, array( 'MMGWC_Initiated_Payments', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'MMGWC_Rewrites', 'deactivate' ) );
 register_deactivation_hook( __FILE__, array( 'MMGWC_Maintenance', 'deactivate' ) );
 register_deactivation_hook( __FILE__, array( 'MMGWC_Subscriptions', 'deactivate' ) );
 register_deactivation_hook( __FILE__, array( 'MMGWC_Features', 'deactivate' ) );
+register_deactivation_hook( __FILE__, array( 'MMGWC_Initiated_Payments', 'deactivate' ) );
 
 // Plugin list page links.
 add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), function( $links ) {
@@ -178,7 +199,9 @@ add_action( 'plugins_loaded', function() {
 	}
 
 	require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-api.php';
+	require_once MMGWC_PLUGIN_DIR . 'includes/class-mmgwc-payment-verifier.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/class-wc-gateway-mmgwc.php';
+	require_once MMGWC_PLUGIN_DIR . 'includes/class-wc-gateway-mmgwc-initiated.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/admin/class-mmgwc-admin.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/admin/class-mmgwc-admin-ui.php';
 	require_once MMGWC_PLUGIN_DIR . 'includes/admin/class-mmgwc-diagnostics.php';
@@ -199,8 +222,11 @@ add_action( 'plugins_loaded', function() {
 
 	add_filter( 'woocommerce_payment_gateways', function( $gateways ) {
 		$gateways[] = 'WC_Gateway_MMGWC';
+		$gateways[] = 'WC_Gateway_MMGWC_Initiated';
 		return $gateways;
 	} );
+	WC_Gateway_MMGWC::init_background_callbacks();
+	MMGWC_Initiated_Payments::init();
 	// WooCommerce Blocks integration is bootstrapped earlier for Blocks compatibility.
 	MMGWC_Admin_UI::init();
 	MMGWC_Admin::init();

@@ -5,7 +5,7 @@ Requires at least: 6.0
 Tested up to: 6.9.1
 Tested with: 6.9.1
 Requires PHP: 7.4
-Stable tag: 2.14.21
+Stable tag: 2.16.0
 License: GPLv2 or later
 
 == Description ==
@@ -19,11 +19,13 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 * Live and Sandbox modes that you can switch any time
 * MMG credential Importer (upload the MMG zip, or upload setup.cfg plus public and private keys)
 * Works with WooCommerce Block Checkout
+* Optional short hosted-checkout walkthrough with responsive image previews
+* Optional MMG app approval request method, disabled until MMG authorises it
 * Order notes and stored MMG transaction details for audit and support
 * Strong callback handling with duplicate callback protection (idempotency)
 * Clear status mapping with better customer messages
 * Advanced status mapping options for stores that want different behaviour
-* Verify payment tool on the order screen (uses MMG lookup when configured)
+* Verify payment tool on the order screen with required authenticated MMG lookup
 * Resend payment link tool for pending orders
 * Payment Requests: create an invoice order, send a secure pay link, track paid and expired
 * Subscriptions: reminder based renewals with subscriber tracking and renewal links
@@ -48,9 +50,10 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 2. Choose your Mode: Sandbox or Live
 3. Go to WP Admin → MMG Checkout → Importer
 4. Upload the zip you received from MMG, or upload setup.cfg and key files separately
-5. Go to WP Admin → MMG Checkout → Diagnostics and copy the Callback URL
-6. Send that Callback URL to MMG Merchant Services during your credential request (UAT or Live)
-7. Run a test order and confirm the order status updates and emails are sent
+5. Enter the Merchant Initiated API credentials used for authenticated Transaction Lookup
+6. Go to WP Admin → MMG Checkout → Diagnostics and copy the Callback URL
+7. Send that Callback URL to MMG Merchant Services during your credential request (UAT or Live)
+8. Run a test order and confirm the order status updates and emails are sent
 
 == Payment Requests ==
 
@@ -86,20 +89,40 @@ Check the MMG dashboard for the transaction status, then open the order and use 
 Use Verify payment on the order. This can update the order without the customer returning.
 
 = MMG shows paid but WooCommerce did not update =
-Confirm the callback URL in the MMG Merchant Services matches the URL shown in Diagnostics. Also confirm you imported the correct keys for the selected mode.
+Confirm the callback URL in MMG Merchant Services matches the URL shown in Diagnostics. Also confirm you imported the correct keys for the selected mode and completed the authenticated Transaction Lookup settings.
 
 = I changed modes and now decryption fails =
 Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re import the correct files for the current mode.
 
 == Changelog ==
 
+= 2.16.0 =
+
+* Added a compact Login and QR walkthrough with responsive lightbox previews and an on or off setting.
+* Added a disabled-by-default MMG app approval method with authenticated polling and fail-closed payment verification.
+* Split API credentials by Sandbox and Live mode and updated the public UAT API base path.
+* Fixed the GitHub repository and moved package verification before installation.
+* Added a one-time verified legacy manifest bridge for existing released installations.
+* Preserved authenticated callbacks for hosted checkouts started before the 2.16.0 update.
+* Added automatic versioned releases for main-branch version updates.
+* Added guidance for the confirmed Login and QR switching race on MMG's hosted page.
+* Required exact release asset names and verified package hashes after all update-download filters run.
+
+= 2.15.0 =
+
+* Security: a browser callback can no longer mark an order paid by itself. Successful callbacks now require an authenticated MMG Transaction Lookup result that matches the exact stored merchant transaction ID, provider transaction ID, immutable amount, GYD currency, merchant account, checkout mode and current order state.
+* Security: merchant transaction IDs now include 128 bits of randomness and order resolution uses only an exact stored metadata match. Predictable order ID parsing was removed.
+* Security: provider transaction IDs cannot be reused across orders. Duplicate callbacks for the same verified order remain idempotent.
+* Security: the admin Verify payment tool applies the same amount, currency, merchant, uniqueness and order-state checks as the public callback.
+* Privacy: callback and lookup metadata now retain only an allow-listed payment summary. Customer wallet party data and provider HTML are not stored.
+* Changed: MMG is hidden from checkout until the authenticated Transaction Lookup credentials are complete. Existing checkout credentials alone are not sufficient to prove settlement.
 
 = 2.14.21 =
 
 * Switched the plugin update channel to GitHub Releases. The plugin now reads the latest release from the project's GitHub repository, finds the attached ZIP and optional SHA-256 sidecar and installs it through the standard WordPress upgrader. The repo is filterable via `mmgwc_github_repo` and the allowed download hosts via `mmgwc_update_allowed_hosts`. An optional `mmgwc_github_token` filter is available for higher API rate limits.
 * Tightened updater safety: HTTPS required for both the API call and the package download, hosts restricted to github.com and objects.githubusercontent.com by default, pre-releases and drafts ignored, version downgrades rejected.
 * Plugin details modal now sources Tested up to, Requires at least and Requires PHP from the local readme.txt so the WP UI always shows accurate compatibility info.
-* The legacy self-hosted JSON manifest is still consulted as a fallback if the GitHub call fails. Removable in a future release once all sites are on 2.14.21 or newer.
+* The legacy self-hosted JSON manifest is still consulted as a fallback if the GitHub call fails. Removable in a future release once all sites are on 2.16.0 or newer.
 
 = 2.14.20 =
 

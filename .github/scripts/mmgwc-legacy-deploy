@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly update_dir='/home/u494709433/domains/revamped.gy/public_html/updates'
+readonly expected_version='2.16.0'
+readonly expected_zip="mmg-checkout-woocommerce-v${expected_version}.zip"
+readonly expected_sidecar="${expected_zip}.sha256"
+readonly expected_manifest='mmg-checkout.json'
+readonly maximum_archive_bytes=33554432
+
+resolved_update_dir=$(realpath -e -- "${update_dir}")
+if [[ "${resolved_update_dir}" != "${update_dir}" || ! -d "${resolved_update_dir}" || ! -w "${resolved_update_dir}" ]]; then
+	echo 'The MMG legacy update directory is unavailable.' >&2
+	exit 1
+fi
+
+work_dir=$(mktemp -d '/home/u494709433/.cache/mmgwc-legacy-deploy.XXXXXX')
+zip_incoming=''
+sidecar_incoming=''
+manifest_incoming=''
+cleanup() {
+	for incoming_path in "${zip_incoming}" "${sidecar_incoming}" "${manifest_incoming}"; do
+		if [[ -n "${incoming_path}" && "${incoming_path}" == "${update_dir}/."*.incoming ]]; then
+			rm -f -- "${incoming_path}"
+		fi
+	done
+	if [[ "${work_dir}" == '/home/u494709433/.cache/mmgwc-legacy-deploy.'* ]]; then
+		rm -rf -- "${work_dir}"
+	fi
+}
+trap cleanup EXIT
+
+archive_path="${work_dir}/payload.tar"
+/usr/bin/head -c 34603008 > "${archive_path}"
+archive_size=$(stat -c '%s' -- "${archive_path}")
+if (( archive_size <= 0 || archive_size > maximum_archive_bytes )); then
+	echo 'The MMG legacy update payload size is invalid.' >&2
+	exit 1
+fi
+
+entries_path="${work_dir}/entries.txt"
+if ! tar -tf "${archive_path}" > "${entries_path}"; then
+	echo 'The MMG legacy update payload is not a valid tar archive.' >&2
+	exit 1
+fi
+mapfile -t archive_entries < "${entries_path}"
+if (( ${#archive_entries[@]} != 3 )); then
+	echo 'The MMG legacy update payload must contain exactly three files.' >&2
+	exit 1
+fi
+
+for required_entry in "${expected_zip}" "${expected_sidecar}" "${expected_manifest}"; do
+	entry_count=0
+	for archive_entry in "${archive_entries[@]}"; do
+		if [[ "${archive_entry}" == "${required_entry}" ]]; then
+			entry_count=$(( entry_count + 1 ))
+		fi
+	done
+	if (( entry_count != 1 )); then
+		echo "The MMG legacy update payload is missing ${required_entry}." >&2
+		exit 1
+	fi
+done
+
+tar --no-same-owner --no-same-permissions -xf "${archive_path}" -C "${work_dir}" -- "${expected_zip}" "${expected_sidecar}" "${expected_manifest}"
+
+for source_name in "${expected_zip}" "${expected_sidecar}" "${expected_manifest}"; do
+	if [[ ! -f "${work_dir}/${source_name}" || -L "${work_dir}/${source_name}" ]]; then
+		echo "The MMG legacy update payload contains an invalid ${source_name} entry." >&2
+		exit 1
+	fi
+done
+
+expected_hash=$(sed -nE 's/^([a-fA-F0-9]{64})([[:space:]].*)?$/\1/p' "${work_dir}/${expected_sidecar}" | head -n 1 | tr 'A-F' 'a-f')
+actual_hash=$(sha256sum "${work_dir}/${expected_zip}" | awk '{print $1}')
+if [[ -z "${expected_hash}" || "${expected_hash}" != "${actual_hash}" ]]; then
+	echo 'The MMG legacy update ZIP does not match its SHA-256 sidecar.' >&2
+	exit 1
+fi
+
+php -r '
+$manifest = json_decode(file_get_contents($argv[1]), true, 32, JSON_THROW_ON_ERROR);
+if (!is_array($manifest)
+    || ($manifest["version"] ?? "") !== $argv[2]
+    || ($manifest["download_url"] ?? "") !== $argv[3]
+    || strtolower((string) ($manifest["package_sha256"] ?? "")) !== $argv[4]
+) {
+    fwrite(STDERR, "The MMG legacy update manifest does not match the verified package.\n");
+    exit(1);
+}
+' "${work_dir}/${expected_manifest}" "${expected_version}" "https://revamped.gy/updates/${expected_zip}" "${actual_hash}"
+
+exec 9>"${update_dir}/.mmgwc-update.lock"
+flock -x 9
+
+for target_name in "${expected_zip}" "${expected_sidecar}" "${expected_manifest}"; do
+	if [[ -L "${update_dir}/${target_name}" ]]; then
+		echo "Refusing to replace symbolic link ${target_name}." >&2
+		exit 1
+	fi
+done
+
+zip_incoming="${update_dir}/.${expected_zip}.$$.incoming"
+sidecar_incoming="${update_dir}/.${expected_sidecar}.$$.incoming"
+manifest_incoming="${update_dir}/.${expected_manifest}.$$.incoming"
+install -m 0644 "${work_dir}/${expected_zip}" "${zip_incoming}"
+install -m 0644 "${work_dir}/${expected_sidecar}" "${sidecar_incoming}"
+install -m 0644 "${work_dir}/${expected_manifest}" "${manifest_incoming}"
+
+mv -f -- "${zip_incoming}" "${update_dir}/${expected_zip}"
+mv -f -- "${sidecar_incoming}" "${update_dir}/${expected_sidecar}"
+mv -f -- "${manifest_incoming}" "${update_dir}/${expected_manifest}"
+
+echo "Published the verified MMG ${expected_version} legacy update bridge."

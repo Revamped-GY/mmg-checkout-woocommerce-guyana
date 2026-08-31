@@ -8,8 +8,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  *
  * Primary update channel: GitHub Releases. The updater fetches
  * https://api.github.com/repos/<owner>/<repo>/releases/latest
- * locates the .zip asset attached to the release, optionally verifies a
- * .zip.sha256 sidecar attached to the same release, and feeds that into the
+ * locates the .zip asset attached to the release, requires and verifies its
+ * .zip.sha256 sidecar before installation, and feeds that into the
  * standard WordPress plugin update flow.
  *
  * Optional fallback: a self-hosted JSON manifest. If the GitHub call fails
@@ -25,13 +25,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  *   - Pre-releases and drafts are ignored.
  *   - Version downgrades are rejected.
  *   - Tag must match a sane semantic version pattern.
- *   - If the release ships a .zip.sha256 sidecar, the package is hashed
- *     before install and aborted if the hash does not match.
+ *   - Every advertised package requires a SHA-256 value and is verified
+ *     before install.
  */
 class MMGWC_Updater {
 
     /** @var string Default repository (owner/name). Override with the `mmgwc_github_repo` filter or the MMGWC_GITHUB_REPO constant. */
-    private const DEFAULT_REPO = 'revamped-gy/mmg-checkout-woocommerce';
+    private const DEFAULT_REPO = 'Revamped-GY/MMG-Checkout-Woocommerce-Guyana';
 
     /** @var string */
     private static $plugin_file = '';
@@ -43,13 +43,10 @@ class MMGWC_Updater {
     private static $slug = 'mmg-checkout-woocommerce';
 
     /** @var string */
-    private static $cache_key = 'mmgwc_update_info_v2';
+    private static $cache_key = 'mmgwc_update_info_v3';
 
     /** @var int */
     private static $cache_ttl = 6 * HOUR_IN_SECONDS;
-
-    /** @var string|null */
-    private static $expected_sha256 = null;
 
     /**
      * Initialise the updater.
@@ -67,8 +64,9 @@ class MMGWC_Updater {
         add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_update' ) );
         add_filter( 'plugins_api', array( __CLASS__, 'plugins_api' ), 20, 3 );
         add_action( 'upgrader_process_complete', array( __CLASS__, 'purge_cache' ), 10, 2 );
-        add_filter( 'upgrader_pre_download', array( __CLASS__, 'capture_expected_hash' ), 10, 3 );
-        add_filter( 'upgrader_post_install', array( __CLASS__, 'verify_downloaded_package' ), 10, 3 );
+        // Run after other download filters so a supplied local file is still
+        // checked before WordPress can unpack this plugin update.
+        add_filter( 'upgrader_pre_download', array( __CLASS__, 'download_verified_package' ), PHP_INT_MAX, 4 );
     }
 
     /**
@@ -149,7 +147,8 @@ class MMGWC_Updater {
             $args['headers']['Authorization'] = 'Bearer ' . $token;
         }
 
-        $response = wp_remote_get( $url, $args );
+        $args['reject_unsafe_urls'] = true;
+        $response = wp_safe_remote_get( $url, $args );
         if ( is_wp_error( $response ) ) {
             return false;
         }
@@ -179,24 +178,35 @@ class MMGWC_Updater {
             return false;
         }
 
-        // Locate the .zip asset and the optional .zip.sha256 sidecar.
+        // Require the release workflow's exact ZIP and matching sidecar names.
+        // This prevents unrelated assets in the same release being paired.
+        $expected_zip_name = 'mmg-checkout-woocommerce-v' . $version . '.zip';
         $download_url = '';
         $sha256_url   = '';
+        $ambiguous_assets = false;
         if ( ! empty( $data->assets ) && is_array( $data->assets ) ) {
             foreach ( $data->assets as $asset ) {
                 if ( ! is_object( $asset ) || empty( $asset->browser_download_url ) ) {
                     continue;
                 }
                 $name = isset( $asset->name ) ? (string) $asset->name : '';
-                if ( $download_url === '' && preg_match( '/\.zip$/i', $name ) ) {
+                if ( $name === $expected_zip_name ) {
+                    if ( $download_url !== '' ) {
+                        $ambiguous_assets = true;
+                        break;
+                    }
                     $download_url = (string) $asset->browser_download_url;
-                } elseif ( $sha256_url === '' && preg_match( '/\.zip\.sha256$/i', $name ) ) {
+                } elseif ( $name === $expected_zip_name . '.sha256' ) {
+                    if ( $sha256_url !== '' ) {
+                        $ambiguous_assets = true;
+                        break;
+                    }
                     $sha256_url = (string) $asset->browser_download_url;
                 }
             }
         }
 
-        if ( $download_url === '' ) {
+        if ( $ambiguous_assets || $download_url === '' || $sha256_url === '' ) {
             return false;
         }
 
@@ -209,16 +219,27 @@ class MMGWC_Updater {
             return false;
         }
 
-        // Pull the SHA-256 sidecar if present.
+        // Pull the required SHA-256 sidecar.
         $package_sha256 = '';
         if ( $sha256_url !== '' ) {
-            $sha_response = wp_remote_get( $sha256_url, array( 'timeout' => 8 ) );
+            $sha_scheme = strtolower( (string) wp_parse_url( $sha256_url, PHP_URL_SCHEME ) );
+            $sha_host = strtolower( (string) wp_parse_url( $sha256_url, PHP_URL_HOST ) );
+            if ( $sha_scheme !== 'https' || ! self::is_allowed_download_host( $sha_host, array( 'github.com', 'objects.githubusercontent.com' ) ) ) {
+                return false;
+            }
+            $sha_response = wp_safe_remote_get( $sha256_url, array( 'timeout' => 8, 'reject_unsafe_urls' => true ) );
             if ( ! is_wp_error( $sha_response ) && 200 === (int) wp_remote_retrieve_response_code( $sha_response ) ) {
                 $sha_body = (string) wp_remote_retrieve_body( $sha_response );
-                if ( preg_match( '/([a-fA-F0-9]{64})/', $sha_body, $m ) ) {
+                if ( strlen( $sha_body ) <= 4096 && preg_match( '/\b([a-fA-F0-9]{64})\b/', $sha_body, $m ) ) {
                     $package_sha256 = strtolower( $m[1] );
                 }
             }
+        }
+
+        // GitHub releases are built by this repository and must carry the
+        // checksum asset. Do not advertise an unverifiable package.
+        if ( $package_sha256 === '' ) {
+            return false;
         }
 
         $last_updated = '';
@@ -235,6 +256,7 @@ class MMGWC_Updater {
             'version'        => $version,
             'download_url'   => esc_url_raw( $download_url ),
             'package_sha256' => $package_sha256,
+            'source'         => 'github',
             'homepage'       => isset( $data->html_url ) ? esc_url_raw( (string) $data->html_url ) : 'https://revamped.gy/mmg-woocommerce-plugin-guyana',
             'last_updated'   => $last_updated,
             'tested'         => self::get_local_readme_field( 'Tested up to' ),
@@ -284,8 +306,9 @@ class MMGWC_Updater {
             return false;
         }
 
-        $response = wp_remote_get( $json_url, array(
-            'timeout' => 12,
+        $response = wp_safe_remote_get( $json_url, array(
+            'timeout'            => 12,
+            'reject_unsafe_urls' => true,
             'headers' => array(
                 'Accept'     => 'application/json',
                 'User-Agent' => 'MMG-Checkout-Updater (+' . home_url( '/' ) . ')',
@@ -331,6 +354,9 @@ class MMGWC_Updater {
                 $package_sha256 = $cleaned;
             }
         }
+        if ( $package_sha256 === '' ) {
+            return false;
+        }
 
         $sections = isset( $data->sections ) && is_object( $data->sections ) ? $data->sections : (object) array();
 
@@ -340,6 +366,7 @@ class MMGWC_Updater {
             'version'        => $version,
             'download_url'   => $download_url,
             'package_sha256' => $package_sha256,
+            'source'         => 'manifest',
             'homepage'       => ! empty( $data->homepage ) ? esc_url_raw( (string) $data->homepage ) : 'https://revamped.gy/mmg-woocommerce-plugin-guyana',
             'last_updated'   => ! empty( $data->last_updated ) ? (string) $data->last_updated : '',
             'tested'         => ! empty( $data->tested ) ? (string) $data->tested : self::get_local_readme_field( 'Tested up to' ),
@@ -496,48 +523,116 @@ class MMGWC_Updater {
     }
 
     /**
-     * Stash the expected SHA-256 (if known) before WordPress downloads the ZIP.
+     * Download this plugin's package to a temporary file and verify it before
+     * WordPress is allowed to unpack or install it.
+     *
+     * Returning the verified local path from upgrader_pre_download makes core
+     * use that exact file. Other plugins and packages remain untouched.
      */
-    public static function capture_expected_hash( $reply, $package, $upgrader ) {
-        if ( ! is_string( $package ) || $package === '' ) {
+    public static function download_verified_package( $reply, $package, $upgrader, $hook_extra ) {
+        if ( self::is_explicit_other_plugin_update( $hook_extra ) ) {
             return $reply;
         }
+
         $remote = self::get_remote_info( false );
-        if ( ! $remote ) {
+        $is_plugin_update = self::is_this_plugin_update( $hook_extra );
+        $matches_advertised_package = is_object( $remote )
+            && ! empty( $remote->download_url )
+            && is_string( $package )
+            && (string) $remote->download_url === $package;
+
+        if ( ! $is_plugin_update && ! $matches_advertised_package ) {
             return $reply;
         }
-        if ( empty( $remote->download_url ) || (string) $remote->download_url !== $package ) {
+
+        if ( is_wp_error( $reply ) ) {
             return $reply;
         }
-        if ( ! empty( $remote->package_sha256 ) ) {
-            self::$expected_sha256 = (string) $remote->package_sha256;
+        if ( ! is_object( $remote ) || empty( $remote->download_url ) ) {
+            return new WP_Error( 'mmgwc_update_metadata_missing', 'MMG Checkout update metadata is unavailable. Update aborted.' );
         }
-        return $reply;
+        if ( ! is_string( $package ) || $package === '' || (string) $remote->download_url !== $package ) {
+            return new WP_Error( 'mmgwc_update_package_changed', 'MMG Checkout update package did not match the verified release metadata. Update aborted.' );
+        }
+
+        $expected = isset( $remote->package_sha256 ) ? strtolower( trim( (string) $remote->package_sha256 ) ) : '';
+        if ( preg_match( '/^[a-f0-9]{64}$/', $expected ) !== 1 ) {
+            return new WP_Error( 'mmgwc_update_hash_missing', 'MMG Checkout update package has no valid SHA-256 checksum. Update aborted.' );
+        }
+
+        $local_file = false;
+        if ( is_string( $reply ) && $reply !== '' ) {
+            $local_file = $reply;
+        } elseif ( false === $reply ) {
+            if ( ! function_exists( 'download_url' ) ) {
+                require_once ABSPATH . 'wp-admin/includes/file.php';
+            }
+            $local_file = download_url( $package, 300 );
+        } else {
+            return new WP_Error( 'mmgwc_update_download_invalid', 'MMG Checkout update download could not be verified. Update aborted.' );
+        }
+
+        if ( is_wp_error( $local_file ) ) {
+            return $local_file;
+        }
+
+        if ( ! is_string( $local_file ) || $local_file === '' || ! is_file( $local_file ) ) {
+            return new WP_Error( 'mmgwc_update_file_missing', 'MMG Checkout update package file is unavailable. Update aborted.' );
+        }
+
+        $actual = hash_file( 'sha256', $local_file );
+        if ( ! is_string( $actual ) || ! hash_equals( $expected, strtolower( $actual ) ) ) {
+            if ( function_exists( 'wp_delete_file' ) ) {
+                wp_delete_file( $local_file );
+            } else {
+                @unlink( $local_file );
+            }
+            return new WP_Error( 'mmgwc_update_hash_mismatch', 'MMG Checkout update package hash did not match the expected value. Update aborted.' );
+        }
+
+        return $local_file;
     }
 
     /**
-     * Verify that the downloaded package matches the declared SHA-256.
-     * If no hash is available, the download proceeds unchanged.
+     * Identify this plugin in a single or bulk upgrader request.
+     *
+     * @param mixed $hook_extra Upgrader context supplied by WordPress.
      */
-    public static function verify_downloaded_package( $response, $hook_extra, $result ) {
-        if ( empty( self::$expected_sha256 ) ) {
-            return $response;
+    private static function is_this_plugin_update( $hook_extra ): bool {
+        if ( self::$plugin_basename === '' || ! is_array( $hook_extra ) ) {
+            return false;
         }
-        if ( is_wp_error( $response ) || empty( $result['source'] ) ) {
-            return $response;
+
+        if ( isset( $hook_extra['plugin'] ) && is_string( $hook_extra['plugin'] ) && $hook_extra['plugin'] === self::$plugin_basename ) {
+            return true;
         }
-        $local_file = isset( $result['local_source'] ) ? (string) $result['local_source'] : '';
-        if ( $local_file === '' || ! is_file( $local_file ) ) {
-            self::$expected_sha256 = null;
-            return $response;
+
+        if ( isset( $hook_extra['plugins'] ) && is_array( $hook_extra['plugins'] ) ) {
+            return in_array( self::$plugin_basename, $hook_extra['plugins'], true );
         }
-        $actual   = @hash_file( 'sha256', $local_file );
-        $expected = self::$expected_sha256;
-        self::$expected_sha256 = null;
-        if ( ! is_string( $actual ) || ! hash_equals( strtolower( $expected ), strtolower( $actual ) ) ) {
-            return new WP_Error( 'mmgwc_update_hash_mismatch', 'MMG Checkout update package hash did not match the expected value. Update aborted.' );
+
+        return false;
+    }
+
+    /**
+     * Avoid remote metadata work when WordPress explicitly identifies another plugin.
+     *
+     * @param mixed $hook_extra Upgrader context supplied by WordPress.
+     */
+    private static function is_explicit_other_plugin_update( $hook_extra ): bool {
+        if ( self::$plugin_basename === '' || ! is_array( $hook_extra ) ) {
+            return false;
         }
-        return $response;
+
+        if ( isset( $hook_extra['plugin'] ) && is_string( $hook_extra['plugin'] ) ) {
+            return $hook_extra['plugin'] !== self::$plugin_basename;
+        }
+
+        if ( isset( $hook_extra['plugins'] ) && is_array( $hook_extra['plugins'] ) ) {
+            return ! in_array( self::$plugin_basename, $hook_extra['plugins'], true );
+        }
+
+        return false;
     }
 
     /**

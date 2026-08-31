@@ -42,11 +42,18 @@ You will get an acknowledgement within five working days. If the issue is confir
 
 - Encrypts protected settings (private keys, secret keys, API credentials) at rest using AES-256-GCM derived from `AUTH_KEY` and `SECURE_AUTH_SALT`. Existing plaintext values from older versions are still readable.
 - Never logs raw tokens, secret keys or PEM blocks. The logger redacts known sensitive keys, bearer headers and PEM blocks recursively.
-- Verifies the host of the update package and refuses non-HTTPS download URLs.
-- Optionally verifies the SHA-256 of the update package before installing it.
+- Verifies the host of the update package, refuses non-HTTPS download URLs and requires the exact release ZIP name.
+- Requires and verifies the update package SHA-256 before WordPress can unpack or install it.
+- Marks an order paid only after authenticated MMG lookup matches the immutable amount, currency, merchant, mode and transaction identifiers.
 - Returns a single generic error for any decryption failure to avoid oracle leakage.
 - Uses POST plus nonces for state-changing customer and admin actions so nonces do not leak in referer or browser history.
 - Treats all customer and webhook input as untrusted.
+
+## WooCommerce concurrency boundary
+
+The plugin serialises its own payment paths with a per-order lock and reloads the WooCommerce order before and after settlement. WooCommerce does not provide a legacy-storage and HPOS compatible compare-and-set operation for the final `payment_complete()` write. An administrator, REST request, automation or another gateway can therefore change the same order after the final plugin read. If the plugin detects a changed or closed order, it preserves the authenticated MMG settlement evidence, keeps the competing WooCommerce state and requires manual review. It does not ask the customer to pay again.
+
+Site-specific integrations should use WooCommerce CRUD methods and should avoid changing an order while an MMG payment is being verified.
 
 ## Disclosures
 

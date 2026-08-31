@@ -1,54 +1,41 @@
 name: Release
 
-# Builds the plugin ZIP, verifies that all three version markers agree, computes a
-# SHA-256 and attaches the ZIP plus a .sha256 sidecar to the GitHub Release.
-#
-# Trigger: a release is published from a tag of the form vX.Y.Z (created either via
-# the GitHub UI from a tag, or by `gh release create vX.Y.Z`). The tag must match
-# the plugin version inside the source files or the workflow fails.
+# A version-bumped push to main creates the matching GitHub Release and its
+# verified installable ZIP. Later main pushes at the same version do nothing.
+# Manually published releases remain supported for backwards compatibility.
 
 on:
+  push:
+    branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: mmgwc-release
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build and attach plugin ZIP
+  validate:
+    name: Validate on PHP ${{ matrix.php-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ["7.4", "8.0", "8.1", "8.2", "8.3"]
 
     steps:
-      - name: Checkout source at the release tag
-        uses: actions/checkout@v4
+      - name: Checkout release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@b604ade2a87db23f8871b7182e69ec5e75effb45 # v2
         with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Resolve version numbers
-        id: ver
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-
-          HEADER_VERSION=$(grep -E "^[[:space:]]*\*[[:space:]]*Version:" mmg-checkout-woocommerce.php | head -n1 | sed -E 's/.*Version:[[:space:]]*//')
-          CONST_VERSION=$(grep -E "MMGWC_VERSION" mmg-checkout-woocommerce.php | head -n1 | sed -E "s/.*'([^']+)'.*/\1/")
-          STABLE_TAG=$(grep -E "^Stable tag:" readme.txt | head -n1 | sed -E 's/Stable tag:[[:space:]]*//')
-
-          echo "Tag:           ${TAG}"
-          echo "Version:       ${VERSION}"
-          echo "Plugin header: ${HEADER_VERSION}"
-          echo "Const:         ${CONST_VERSION}"
-          echo "Stable tag:    ${STABLE_TAG}"
-
-          if [ "${VERSION}" != "${HEADER_VERSION}" ] || [ "${VERSION}" != "${CONST_VERSION}" ] || [ "${VERSION}" != "${STABLE_TAG}" ]; then
-            echo "::error::Tag ${TAG} does not match plugin version markers."
-            exit 1
-          fi
-
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          php-version: ${{ matrix.php-version }}
+          coverage: none
 
       - name: Lint PHP
         run: |
@@ -68,11 +55,92 @@ jobs:
             -not -path "./vendor/*" \
             -not -path "./node_modules/*" -print0)
           if [ "$fail" -ne 0 ]; then
-            echo "::error::PHP syntax errors detected. Aborting release build."
             exit 1
           fi
 
+      - name: Test payment invariants
+        run: |
+          set -euo pipefail
+          php tests/run-atomic-option-tests.php
+          php tests/run-payment-context-tests.php
+          php tests/run-hosted-legacy-session-tests.php
+          php tests/run-payment-verifier-tests.php
+          php tests/run-api-contract-tests.php
+          php tests/run-initiated-scheduler-tests.php
+          php tests/run-initiated-start-tests.php
+          php tests/run-updater-integrity-tests.php
+
+      - name: Check checkout scripts
+        if: matrix.php-version == '7.4'
+        run: |
+          set -euo pipefail
+          node --check assets/js/blocks.js
+          node --check assets/js/checkout-guide.js
+          node --check assets/js/initiated-blocks.js
+          node --check assets/js/initiated-status.js
+
+  build:
+    name: Build verified plugin release
+    runs-on: ubuntu-latest
+    needs: validate
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          HEADER_VERSION=$(grep -E "^[[:space:]]*\*[[:space:]]*Version:" mmg-checkout-woocommerce.php | head -n1 | sed -E 's/.*Version:[[:space:]]*//')
+          CONST_VERSION=$(grep -E "MMGWC_VERSION" mmg-checkout-woocommerce.php | head -n1 | sed -E "s/.*'([^']+)'.*/\1/")
+          STABLE_TAG=$(grep -E "^Stable tag:" readme.txt | head -n1 | sed -E 's/Stable tag:[[:space:]]*//')
+
+          if [ "${HEADER_VERSION}" != "${CONST_VERSION}" ] || [ "${HEADER_VERSION}" != "${STABLE_TAG}" ]; then
+            echo "::error::Plugin version markers do not agree."
+            exit 1
+          fi
+          if ! [[ "${HEADER_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Plugin version is not a three-part semantic version."
+            exit 1
+          fi
+
+          VERSION="${HEADER_VERSION}"
+          TAG="v${VERSION}"
+          SHOULD_RELEASE=true
+          if [ "${EVENT_NAME}" = "release" ]; then
+            if [ "${RELEASE_TAG}" != "${TAG}" ]; then
+              echo "::error::Release tag ${RELEASE_TAG} does not match plugin version ${VERSION}."
+              exit 1
+            fi
+          elif gh release view "${TAG}" >/dev/null 2>&1; then
+            SHOULD_RELEASE=false
+            echo "Release ${TAG} already exists. No new user update is needed for this commit."
+          fi
+
+          if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null; then
+            TAG_SHA=$(git rev-parse "refs/tags/${TAG}^{commit}")
+            HEAD_SHA=$(git rev-parse HEAD)
+            if [ "${TAG_SHA}" != "${HEAD_SHA}" ] && [ "${SHOULD_RELEASE}" = "true" ]; then
+              echo "::error::Tag ${TAG} already points to ${TAG_SHA}, not ${HEAD_SHA}."
+              exit 1
+            fi
+          fi
+
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "should_release=${SHOULD_RELEASE}" >> "${GITHUB_OUTPUT}"
+
       - name: Stage plugin folder
+        if: steps.ver.outputs.should_release == 'true'
         run: |
           set -euo pipefail
           rm -rf build
@@ -92,7 +160,9 @@ jobs:
             --exclude='vendor/' \
             --exclude='tests/' \
             --exclude='docs/' \
+            --exclude='AGENTS.md' \
             --exclude='CLAUDE.md' \
+            --exclude='PRODUCT.md' \
             --exclude='CONTRIBUTING.md' \
             --exclude='SECURITY.md' \
             --exclude='CHANGELOG.md' \
@@ -105,36 +175,96 @@ jobs:
             --exclude='Thumbs.db' \
             ./ build/mmg-checkout-woocommerce/
 
-      - name: Build ZIP
+      - name: Build ZIP and release notes
+        if: steps.ver.outputs.should_release == 'true'
         id: zip
         run: |
           set -euo pipefail
-          NAME="mmg-checkout-woocommerce-v${{ steps.ver.outputs.version }}.zip"
+          VERSION="${{ steps.ver.outputs.version }}"
+          NAME="mmg-checkout-woocommerce-v${VERSION}.zip"
           ( cd build && zip -qr "../${NAME}" mmg-checkout-woocommerce )
           SHA=$(sha256sum "${NAME}" | awk '{print $1}')
           echo "${SHA}  ${NAME}" > "${NAME}.sha256"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
-          ls -la "${NAME}" "${NAME}.sha256"
-          echo "SHA-256: ${SHA}"
 
-      - name: Attach assets to the release
-        uses: softprops/action-gh-release@v2
+          awk -v version="${VERSION}" '
+            $0 ~ ("^## \\[" version "\\]( |$)") { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "- See CHANGELOG.md for changes." > release-notes.md
+          fi
+          printf '\n- Installable ZIP: `%s`\n- SHA-256: `%s`\n' "${NAME}" "${SHA}" >> release-notes.md
+
+          echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build the one-time legacy bridge manifest
+        if: steps.ver.outputs.should_release == 'true' && steps.ver.outputs.version == '2.16.0'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          NAME: ${{ steps.zip.outputs.name }}
+          SHA256: ${{ steps.zip.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          php -r '
+          $manifest = array(
+              "name" => "MMG Checkout for WooCommerce",
+              "slug" => "mmg-checkout-woocommerce",
+              "version" => $argv[1],
+              "download_url" => "https://revamped.gy/updates/" . $argv[2],
+              "package_sha256" => $argv[3],
+              "homepage" => "https://revamped.gy/mmg-woocommerce-plugin-guyana",
+              "tested" => "6.9.1",
+              "requires" => "6.0",
+              "requires_php" => "7.4",
+              "last_updated" => gmdate("Y-m-d"),
+              "sections" => array(
+                  "description" => "<p>MMG Checkout for WooCommerce provides hosted MMG checkout, optional app approval requests and authenticated payment verification.</p>",
+                  "installation" => "<p>Use the normal WordPress plugin update screen. Back up the site before updating.</p>",
+                  "changelog" => "<h4>2.16.0</h4><ul><li>Added checkout guidance and an optional MMG app approval method.</li><li>Strengthened payment verification and update-package integrity.</li></ul>",
+              ),
+          );
+          file_put_contents("mmg-checkout.json", json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+          ' "${VERSION}" "${NAME}" "${SHA256}"
+
+      - name: Publish the one-time legacy update bridge
+        if: steps.ver.outputs.should_release == 'true' && steps.ver.outputs.version == '2.16.0'
+        env:
+          DEPLOY_KEY: ${{ secrets.MMGWC_LEGACY_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.MMGWC_LEGACY_KNOWN_HOSTS }}
+          NAME: ${{ steps.zip.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_KEY}" ] || [ -z "${KNOWN_HOSTS}" ]; then
+            echo "::error::The restricted legacy bridge deployment credentials are not configured."
+            exit 1
+          fi
+          install -m 0700 -d "${HOME}/.ssh"
+          printf '%s\n' "${DEPLOY_KEY}" > "${HOME}/.ssh/mmgwc-legacy-deploy"
+          printf '%s\n' "${KNOWN_HOSTS}" > "${HOME}/.ssh/known_hosts"
+          chmod 0600 "${HOME}/.ssh/mmgwc-legacy-deploy" "${HOME}/.ssh/known_hosts"
+          cleanup_key() {
+            rm -f "${HOME}/.ssh/mmgwc-legacy-deploy"
+          }
+          trap cleanup_key EXIT
+          tar -cf - "${NAME}" "${NAME}.sha256" mmg-checkout.json |
+            ssh -T -p 65002 -i "${HOME}/.ssh/mmgwc-legacy-deploy" \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              u494709433@46.202.90.70
+
+      - name: Create release and attach verified assets
+        if: steps.ver.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.ver.outputs.tag }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
           files: |
             ${{ steps.zip.outputs.name }}
             ${{ steps.zip.outputs.name }}.sha256
-          append_body: true
-          body: |
-
-            ---
-
-            **Installable ZIP:** `${{ steps.zip.outputs.name }}`
-            **SHA-256:** `${{ steps.zip.outputs.sha256 }}`
-
-            Verify before installing:
-
-            ```
-            sha256sum -c ${{ steps.zip.outputs.name }}.sha256
-            ```
+            mmg-checkout.json

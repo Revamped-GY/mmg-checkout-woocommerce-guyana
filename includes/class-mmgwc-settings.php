@@ -14,6 +14,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * encrypted at rest via MMGWC_Secure_Store. Callers always see plaintext.
  */
 final class MMGWC_Settings {
+	public const DEFAULT_SANDBOX_API_BASE = 'https://mwallet.mmgtest.net/olive/publisher/v1';
+	private const LEGACY_SANDBOX_API_BASE = 'https://mwallet.mmgtest.net/mwallet/v1';
 
 	public static function get_all(): array {
 		$settings = get_option( MMGWC_SETTINGS_OPTION_KEY, array() );
@@ -67,17 +69,21 @@ final class MMGWC_Settings {
 	public static function get( string $key, $default = '' ) {
 		$override = self::get_constant_override( $key );
 		if ( $override !== null ) {
-			return $override;
+			return self::normalise_setting_value( $key, $override );
 		}
 		$all = self::get_all();
 		if ( ! array_key_exists( $key, $all ) ) {
-			return $default;
+			$legacy_key = self::legacy_sandbox_api_key( $key );
+			if ( $legacy_key !== '' ) {
+				return self::normalise_setting_value( $key, self::get( $legacy_key, $default ) );
+			}
+			return self::normalise_setting_value( $key, $default );
 		}
 		$value = $all[ $key ];
 		if ( class_exists( 'MMGWC_Secure_Store' ) && in_array( $key, MMGWC_Secure_Store::protected_keys(), true ) ) {
 			$value = MMGWC_Secure_Store::decrypt( $value );
 		}
-		return $value;
+		return self::normalise_setting_value( $key, $value );
 	}
 
 	/**
@@ -97,13 +103,16 @@ final class MMGWC_Settings {
 			'public_key' => (string) self::get( $prefix . 'public_key', '' ),
 			'private_key' => (string) self::get( $prefix . 'private_key', '' ),
 
-			// Optional API details.
-			'mwallet_base_url' => trim( (string) self::get( 'api_mwallet_base_url', '' ) ),
-			'api_key' => trim( (string) self::get( 'api_key', '' ) ),
-			'wss_mid' => trim( (string) self::get( 'api_wss_mid', '' ) ),
-			'wss_mkey' => trim( (string) self::get( 'api_wss_mkey', '' ) ),
-			'wss_msecret' => trim( (string) self::get( 'api_wss_msecret', '' ) ),
-			'password' => trim( (string) self::get( 'api_password', '' ) ),
+			// Merchant Initiated API details are environment-specific. Legacy
+			// global values are accepted only as Sandbox fallbacks because the
+			// previous built-in endpoint was an MMG UAT endpoint.
+			'mwallet_base_url' => trim( (string) self::get( $prefix . 'api_mwallet_base_url', $mode === 'sandbox' ? self::DEFAULT_SANDBOX_API_BASE : '' ) ),
+			'api_key' => trim( (string) self::get( $prefix . 'api_key', '' ) ),
+			'wss_mid' => trim( (string) self::get( $prefix . 'api_wss_mid', '' ) ),
+			'wss_mkey' => trim( (string) self::get( $prefix . 'api_wss_mkey', '' ) ),
+			'wss_msecret' => trim( (string) self::get( $prefix . 'api_wss_msecret', '' ) ),
+			'password' => trim( (string) self::get( $prefix . 'api_password', '' ) ),
+			'credit_account_id' => trim( (string) self::get( $prefix . 'api_credit_account_id', '' ) ),
 
 			// Status mapping.
 			'status_success_virtual'  => (string) self::get( 'status_success_virtual', '' ),
@@ -126,12 +135,48 @@ final class MMGWC_Settings {
 		if ( ! class_exists( 'MMGWC_Secure_Store' ) ) {
 			return $settings;
 		}
+		$existing = self::get_all();
 		foreach ( MMGWC_Secure_Store::protected_keys() as $k ) {
 			if ( array_key_exists( $k, $settings ) && is_string( $settings[ $k ] ) && $settings[ $k ] !== '' ) {
-				$settings[ $k ] = MMGWC_Secure_Store::encrypt( $settings[ $k ] );
+				$settings[ $k ] = MMGWC_Secure_Store::encrypt_preserving_existing(
+					$settings[ $k ],
+					isset( $existing[ $k ] ) && is_string( $existing[ $k ] ) ? $existing[ $k ] : ''
+				);
 			}
 		}
 		return $settings;
+	}
+
+	/**
+	 * Convert the former global API fields into read-only Sandbox fallbacks.
+	 * New values are saved under mode-specific keys on the next settings save.
+	 */
+	private static function legacy_sandbox_api_key( string $key ): string {
+		$map = array(
+			'sandbox_api_mwallet_base_url' => 'api_mwallet_base_url',
+			'sandbox_api_key' => 'api_key',
+			'sandbox_api_wss_mid' => 'api_wss_mid',
+			'sandbox_api_wss_mkey' => 'api_wss_mkey',
+			'sandbox_api_wss_msecret' => 'api_wss_msecret',
+			'sandbox_api_password' => 'api_password',
+		);
+		return isset( $map[ $key ] ) ? $map[ $key ] : '';
+	}
+
+	/**
+	 * Migrate the stale built-in UAT API base without rewriting custom URLs.
+	 */
+	private static function normalise_setting_value( string $key, $value ) {
+		if ( ! is_string( $value ) ) {
+			return $value;
+		}
+		if ( in_array( $key, array( 'api_mwallet_base_url', 'sandbox_api_mwallet_base_url' ), true ) ) {
+			$trimmed = rtrim( trim( $value ), '/' );
+			if ( $trimmed === '' || hash_equals( self::LEGACY_SANDBOX_API_BASE, $trimmed ) ) {
+				return self::DEFAULT_SANDBOX_API_BASE;
+			}
+		}
+		return $value;
 	}
 
 	/**
@@ -161,13 +206,29 @@ final class MMGWC_Settings {
 			'live_public_key'    => 'MMGWC_LIVE_PUBLIC_KEY',
 			'live_private_key'   => 'MMGWC_LIVE_PRIVATE_KEY',
 
-			// Merchant initiated API.
+			// Legacy global Merchant Initiated API overrides.
 			'api_mwallet_base_url' => 'MMGWC_MWALLET_BASE_URL',
 			'api_key'              => 'MMGWC_API_KEY',
 			'api_wss_mid'          => 'MMGWC_WSS_MID',
 			'api_wss_mkey'         => 'MMGWC_WSS_MKEY',
 			'api_wss_msecret'      => 'MMGWC_WSS_MSECRET',
 			'api_password'         => 'MMGWC_API_PASSWORD',
+
+			// Environment-specific Merchant Initiated API overrides.
+			'sandbox_api_mwallet_base_url' => 'MMGWC_SANDBOX_MWALLET_BASE_URL',
+			'sandbox_api_key'              => 'MMGWC_SANDBOX_API_KEY',
+			'sandbox_api_wss_mid'          => 'MMGWC_SANDBOX_WSS_MID',
+			'sandbox_api_wss_mkey'         => 'MMGWC_SANDBOX_WSS_MKEY',
+			'sandbox_api_wss_msecret'      => 'MMGWC_SANDBOX_WSS_MSECRET',
+			'sandbox_api_password'         => 'MMGWC_SANDBOX_API_PASSWORD',
+			'sandbox_api_credit_account_id' => 'MMGWC_SANDBOX_API_CREDIT_ACCOUNT_ID',
+			'live_api_mwallet_base_url' => 'MMGWC_LIVE_MWALLET_BASE_URL',
+			'live_api_key'              => 'MMGWC_LIVE_API_KEY',
+			'live_api_wss_mid'          => 'MMGWC_LIVE_WSS_MID',
+			'live_api_wss_mkey'         => 'MMGWC_LIVE_WSS_MKEY',
+			'live_api_wss_msecret'      => 'MMGWC_LIVE_WSS_MSECRET',
+			'live_api_password'         => 'MMGWC_LIVE_API_PASSWORD',
+			'live_api_credit_account_id' => 'MMGWC_LIVE_API_CREDIT_ACCOUNT_ID',
 
 			// Status mapping.
 			'status_success_virtual'  => 'MMGWC_STATUS_SUCCESS_VIRTUAL',

@@ -42,8 +42,11 @@
 .gitattributes  export-ignore
 .gitignore      export-ignore
 .env.example    export-ignore
+tests/          export-ignore
 docs/           export-ignore
+AGENTS.md       export-ignore
 CLAUDE.md       export-ignore
+PRODUCT.md      export-ignore
 CONTRIBUTING.md export-ignore
 SECURITY.md     export-ignore
 CHANGELOG.md    export-ignore
