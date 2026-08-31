@@ -15,6 +15,7 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 	private const HOSTED_CALLBACK_MAX_PROCESSING_FAILURES = 8;
 	private const HOSTED_CALLBACK_MAX_AGE = DAY_IN_SECONDS;
 	private const HOSTED_CALLBACK_PROCESSING_LOCK_TTL = 1200;
+	private $rendering_settings_html = false;
 
 	public function __construct() {
 		$this->id = 'mmg_checkout';
@@ -159,7 +160,27 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 	 */
 	public function get_option( $key, $empty_value = null ) {
 		$default = parent::get_option( $key, $empty_value );
+		if (
+			$this->rendering_settings_html
+			&& class_exists( 'MMGWC_Secure_Store' )
+			&& in_array( (string) $key, MMGWC_Secure_Store::protected_keys(), true )
+		) {
+			return '';
+		}
 		return MMGWC_Settings::get( (string) $key, $default );
+	}
+
+	/**
+	 * Render protected fields as empty replacement inputs. Existing values are
+	 * preserved when the administrator leaves these fields blank.
+	 */
+	public function generate_settings_html( $form_fields = array(), $echo = true ) {
+		$this->rendering_settings_html = true;
+		try {
+			return parent::generate_settings_html( $form_fields, $echo );
+		} finally {
+			$this->rendering_settings_html = false;
+		}
 	}
 
 	/**
@@ -187,11 +208,14 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 			$existing = get_option( $this->get_option_key(), array() );
 			$existing = is_array( $existing ) ? $existing : array();
 			foreach ( MMGWC_Secure_Store::protected_keys() as $k ) {
-				if ( array_key_exists( $k, $sanitized ) && is_string( $sanitized[ $k ] ) && $sanitized[ $k ] !== '' ) {
-					$sanitized[ $k ] = MMGWC_Secure_Store::encrypt_preserving_existing(
-						$sanitized[ $k ],
-						isset( $existing[ $k ] ) && is_string( $existing[ $k ] ) ? $existing[ $k ] : ''
-					);
+				if ( array_key_exists( $k, $sanitized ) && is_string( $sanitized[ $k ] ) ) {
+					$existing_value = isset( $existing[ $k ] ) && is_string( $existing[ $k ] ) ? $existing[ $k ] : '';
+					$replacement = MMGWC_Secure_Store::encrypt_preserving_existing( $sanitized[ $k ], $existing_value );
+					if ( $replacement === '' && $existing_value === '' ) {
+						unset( $sanitized[ $k ] );
+						continue;
+					}
+					$sanitized[ $k ] = $replacement;
 				}
 			}
 		}
@@ -364,9 +388,9 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 			),
 
 			'sandbox_api_section' => array(
-				'title' => 'Sandbox Merchant Initiated API',
+				'title' => 'Sandbox Transaction Verification API',
 				'type' => 'title',
-				'description' => 'Required for authenticated Sandbox payment verification and the optional approval request method. Use merchant-specific values issued by MMG. Values shown in public developer examples are not credentials.',
+				'description' => 'Required for the standard hosted checkout to verify completed payments. The optional approval request method reuses these merchant-specific MMG values. Public developer examples are not credentials.',
 			),
 			'sandbox_api_mwallet_base_url' => array(
 				'title' => 'MWallet Base URL',
@@ -395,15 +419,15 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				'description' => 'Used to obtain a short-lived resource token.',
 			),
 			'sandbox_api_credit_account_id' => array(
-				'title' => 'Merchant Credit Account ID',
+				'title' => 'Approval requests: Merchant Credit Account ID',
 				'type' => 'text',
 				'description' => 'Required only for approval requests. Ask MMG whether this equals x-wss-mid or a separate account ID.',
 			),
 
 			'live_api_section' => array(
-				'title' => 'Live Merchant Initiated API',
+				'title' => 'Live Transaction Verification API',
 				'type' => 'title',
-				'description' => 'Required for authenticated Live payment verification and the optional approval request method. MMG does not publish the production base URL. Enter only values issued for this merchant and approved for Live use.',
+				'description' => 'Required for the standard hosted checkout to verify completed payments. The optional approval request method reuses these merchant-specific MMG values. MMG does not publish the production base URL.',
 			),
 			'live_api_mwallet_base_url' => array(
 				'title' => 'Live MWallet Base URL',
@@ -431,7 +455,7 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				'type' => 'password',
 			),
 			'live_api_credit_account_id' => array(
-				'title' => 'Live Merchant Credit Account ID',
+				'title' => 'Approval requests: Live Merchant Credit Account ID',
 				'type' => 'text',
 				'description' => 'Use the exact creditParty account ID confirmed by MMG for Live approval requests.',
 			),
@@ -543,6 +567,41 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				),
 			),
 		);
+
+		$this->mark_protected_form_fields();
+	}
+
+	/**
+	 * Explain protected replacement fields without exposing plaintext or encrypted values.
+	 */
+	private function mark_protected_form_fields(): void {
+		if ( ! class_exists( 'MMGWC_Secure_Store' ) ) {
+			return;
+		}
+		foreach ( MMGWC_Secure_Store::protected_keys() as $key ) {
+			if ( ! isset( $this->form_fields[ $key ] ) || ! is_array( $this->form_fields[ $key ] ) ) {
+				continue;
+			}
+			$state = MMGWC_Settings::protected_value_state( $key );
+			$status = '';
+			if ( $state === 'constant' ) {
+				$status = 'This value is supplied through wp-config.php and is not shown here.';
+			} elseif ( $state === 'stored' || $state === 'legacy_plaintext' ) {
+				$status = 'A protected value is stored. Leave this field blank to keep it.';
+			} elseif ( $state === 'unreadable' ) {
+				$status = '<strong>The stored value cannot be decrypted on this site. Re-enter the original credential to replace it.</strong>';
+			}
+			if ( $status === '' ) {
+				continue;
+			}
+			$description = isset( $this->form_fields[ $key ]['description'] )
+				? trim( (string) $this->form_fields[ $key ]['description'] )
+				: '';
+			$this->form_fields[ $key ]['description'] = $description === '' ? $status : $description . ' ' . $status;
+			$this->form_fields[ $key ]['placeholder'] = $state === 'unreadable'
+				? 'Re-enter the original credential'
+				: 'Stored securely. Leave blank to keep.';
+		}
 	}
 
 	private function is_debug_enabled(): bool {

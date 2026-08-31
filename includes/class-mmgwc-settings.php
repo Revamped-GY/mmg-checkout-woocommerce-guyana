@@ -103,9 +103,9 @@ final class MMGWC_Settings {
 			'public_key' => (string) self::get( $prefix . 'public_key', '' ),
 			'private_key' => (string) self::get( $prefix . 'private_key', '' ),
 
-			// Merchant Initiated API details are environment-specific. Legacy
-			// global values are accepted only as Sandbox fallbacks because the
-			// previous built-in endpoint was an MMG UAT endpoint.
+			// Transaction Verification API details are environment-specific and
+			// are also reused by the optional approval-request method. Legacy global
+			// values are Sandbox fallbacks because the former endpoint was MMG UAT.
 			'mwallet_base_url' => trim( (string) self::get( $prefix . 'api_mwallet_base_url', $mode === 'sandbox' ? self::DEFAULT_SANDBOX_API_BASE : '' ) ),
 			'api_key' => trim( (string) self::get( $prefix . 'api_key', '' ) ),
 			'wss_mid' => trim( (string) self::get( $prefix . 'api_wss_mid', '' ) ),
@@ -137,14 +137,58 @@ final class MMGWC_Settings {
 		}
 		$existing = self::get_all();
 		foreach ( MMGWC_Secure_Store::protected_keys() as $k ) {
-			if ( array_key_exists( $k, $settings ) && is_string( $settings[ $k ] ) && $settings[ $k ] !== '' ) {
-				$settings[ $k ] = MMGWC_Secure_Store::encrypt_preserving_existing(
-					$settings[ $k ],
-					isset( $existing[ $k ] ) && is_string( $existing[ $k ] ) ? $existing[ $k ] : ''
-				);
+			if ( array_key_exists( $k, $settings ) && is_string( $settings[ $k ] ) ) {
+				$existing_value = isset( $existing[ $k ] ) && is_string( $existing[ $k ] ) ? $existing[ $k ] : '';
+				$replacement = MMGWC_Secure_Store::encrypt_preserving_existing( $settings[ $k ], $existing_value );
+				if ( $replacement === '' && $existing_value === '' ) {
+					unset( $settings[ $k ] );
+					continue;
+				}
+				$settings[ $k ] = $replacement;
 			}
 		}
 		return $settings;
+	}
+
+	/**
+	 * Report safe storage metadata for a protected setting without returning its value.
+	 */
+	public static function protected_value_state( string $key ): string {
+		if ( ! class_exists( 'MMGWC_Secure_Store' ) || ! in_array( $key, MMGWC_Secure_Store::protected_keys(), true ) ) {
+			return 'not_protected';
+		}
+
+		$override = self::get_constant_override( $key );
+		if ( is_scalar( $override ) && trim( (string) $override ) !== '' ) {
+			return 'constant';
+		}
+
+		$settings = self::get_all();
+		if ( ! isset( $settings[ $key ] ) || ! is_string( $settings[ $key ] ) || $settings[ $key ] === '' ) {
+			return 'missing';
+		}
+
+		if ( ! MMGWC_Secure_Store::is_encrypted( $settings[ $key ] ) ) {
+			return 'legacy_plaintext';
+		}
+
+		return MMGWC_Secure_Store::can_decrypt( $settings[ $key ] ) ? 'stored' : 'unreadable';
+	}
+
+	/**
+	 * Return protected setting names that are encrypted but unreadable on this site.
+	 */
+	public static function unreadable_protected_keys(): array {
+		$unreadable = array();
+		if ( ! class_exists( 'MMGWC_Secure_Store' ) ) {
+			return $unreadable;
+		}
+		foreach ( MMGWC_Secure_Store::protected_keys() as $key ) {
+			if ( self::protected_value_state( $key ) === 'unreadable' ) {
+				$unreadable[] = $key;
+			}
+		}
+		return $unreadable;
 	}
 
 	/**
@@ -206,7 +250,7 @@ final class MMGWC_Settings {
 			'live_public_key'    => 'MMGWC_LIVE_PUBLIC_KEY',
 			'live_private_key'   => 'MMGWC_LIVE_PRIVATE_KEY',
 
-			// Legacy global Merchant Initiated API overrides.
+			// Legacy global Transaction Verification API overrides.
 			'api_mwallet_base_url' => 'MMGWC_MWALLET_BASE_URL',
 			'api_key'              => 'MMGWC_API_KEY',
 			'api_wss_mid'          => 'MMGWC_WSS_MID',
@@ -214,7 +258,7 @@ final class MMGWC_Settings {
 			'api_wss_msecret'      => 'MMGWC_WSS_MSECRET',
 			'api_password'         => 'MMGWC_API_PASSWORD',
 
-			// Environment-specific Merchant Initiated API overrides.
+			// Environment-specific Transaction Verification API overrides.
 			'sandbox_api_mwallet_base_url' => 'MMGWC_SANDBOX_MWALLET_BASE_URL',
 			'sandbox_api_key'              => 'MMGWC_SANDBOX_API_KEY',
 			'sandbox_api_wss_mid'          => 'MMGWC_SANDBOX_WSS_MID',

@@ -441,6 +441,7 @@ check( ! array_key_exists( 'debitParty', $lookup_record ) && ! array_key_exists(
 $missing = base_config();
 $missing['api_key'] = '';
 check( in_array( 'api_key', MMGWC_Payment_Verifier::missing_api_fields( $missing ), true ), 'Missing lookup credentials keep the gateway fail closed.' );
+check( MMGWC_Payment_Verifier::missing_api_fields( base_config() ) === array(), 'Standard hosted checkout verification does not require an approval-request credit account or enable switch.' );
 
 check( MMGWC_Payment_Verifier::acquire_order_lock( 42 ) === true, 'The first verifier acquires the order lock.' );
 check( MMGWC_Payment_Verifier::acquire_order_lock( 42 ) === false, 'A concurrent verifier cannot acquire the same order lock.' );

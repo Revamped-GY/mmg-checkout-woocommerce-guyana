@@ -233,7 +233,7 @@ final class MMGWC_Admin {
 				return array(
 					'success' => false,
 					'http_status' => 400,
-					'message' => 'Missing Merchant Initiated API settings: ' . implode( ', ', $missing ) . '. Go to WP Admin → MMG Checkout → Settings and fill the Merchant Initiated API section.',
+					'message' => 'Missing Transaction Verification API settings: ' . implode( ', ', $missing ) . '. Go to WP Admin → MMG Checkout → Settings and fill the Transaction Verification API section.',
 					'summary' => '',
 				);
 			}

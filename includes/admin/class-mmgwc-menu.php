@@ -316,6 +316,7 @@ final class MMGWC_Menu {
 
 		if ( isset( $_POST['mmgwc_save_settings'] ) ) {
 			check_admin_referer( 'mmgwc_save_settings', 'mmgwc_nonce' );
+			MMGWC_Secure_Store::reset_operation_errors();
 
 			$post_data = wp_unslash( $_POST );
 			$new_values = array();
@@ -331,11 +332,16 @@ final class MMGWC_Menu {
 			// stored by the QR admin page) are not silently wiped. Encryption of protected
 			// fields and autoload=no are handled by MMGWC_Settings::update_partial().
 			MMGWC_Settings::update_partial( $new_values );
+			$storage_errors = MMGWC_Secure_Store::operation_errors();
 
-			MMGWC_Logger::info( 'MMG gateway settings saved', array( 'user_id' => get_current_user_id() ) );
+			if ( empty( $storage_errors ) ) {
+				MMGWC_Logger::info( 'MMG gateway settings saved', array( 'user_id' => get_current_user_id() ) );
+			} else {
+				MMGWC_Logger::warning( 'MMG gateway settings saved with rejected protected credential changes', array( 'user_id' => get_current_user_id() ) );
+			}
+			self::render_settings_save_notices( $storage_errors );
 
-			echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
-
+			$gateway->init_form_fields();
 			$gateway->init_settings();
 		}
 
@@ -345,6 +351,10 @@ final class MMGWC_Menu {
 		}
 		echo '<h1>MMG Checkout Settings</h1>';
 		echo '<p>Configure your Sandbox (UAT) and Live (Production) MMG credentials below. You can also import these automatically from the MMG zip package using <strong>MMG Checkout → Importer</strong>.</p>';
+		$unreadable = MMGWC_Settings::unreadable_protected_keys();
+		if ( ! empty( $unreadable ) ) {
+			echo '<div class="notice notice-error inline"><p><strong>One or more protected MMG credentials cannot be decrypted on this site.</strong> Re-enter each field marked below using the original credential value. Checkout remains unavailable while an active credential is unreadable.</p></div>';
+		}
 
 		echo '<form method="post" action="">';
 		wp_nonce_field( 'mmgwc_save_settings', 'mmgwc_nonce' );
@@ -357,6 +367,19 @@ final class MMGWC_Menu {
 
 		echo '<p style="margin-top:16px;">Need help? <a href="' . esc_url( admin_url( 'admin.php?page=mmgwc-help' ) ) . '">Open the Help page</a>.</p>';
 		echo '</div>';
+	}
+
+	/**
+	 * Render one factual outcome for a custom settings-page save.
+	 */
+	private static function render_settings_save_notices( array $storage_errors ): void {
+		if ( empty( $storage_errors ) ) {
+			echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
+			return;
+		}
+		foreach ( array_unique( $storage_errors ) as $message ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( (string) $message ) . '</p></div>';
+		}
 	}
 
 	public static function render_logs(): void {
