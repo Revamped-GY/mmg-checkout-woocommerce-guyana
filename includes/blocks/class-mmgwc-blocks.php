@@ -36,9 +36,11 @@ final class MMGWC_Blocks {
 		}
 
 		require_once MMGWC_PLUGIN_DIR . 'includes/blocks/class-mmgwc-blocks-integration.php';
+		require_once MMGWC_PLUGIN_DIR . 'includes/blocks/class-mmgwc-initiated-blocks-integration.php';
 
 		if ( is_object( $payment_method_registry ) && method_exists( $payment_method_registry, 'register' ) ) {
 			$payment_method_registry->register( new MMGWC_Blocks_Integration() );
+			$payment_method_registry->register( new MMGWC_Initiated_Blocks_Integration() );
 		}
 	}
 }

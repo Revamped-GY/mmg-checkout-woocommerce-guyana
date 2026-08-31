@@ -14,9 +14,19 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 
 global $wpdb;
 
+// Unschedule every per-order approval check, regardless of its arguments.
+if ( function_exists( 'wp_unschedule_hook' ) ) {
+	wp_unschedule_hook( 'mmgwc_check_initiated_payment' );
+	wp_unschedule_hook( 'mmgwc_process_hosted_callback' );
+}
+if ( function_exists( 'as_unschedule_all_actions' ) ) {
+	as_unschedule_all_actions( 'mmgwc_check_initiated_payment' );
+}
+
 // Drop plugin options.
 $options_to_delete = array(
 	'woocommerce_mmg_checkout_settings',
+	'mmgwc_subscriptions_settings',
 	'mmgwc_feature_flags',
 	'mmgwc_version',
 	'mmgwc_qr_templates_index',
@@ -39,11 +49,7 @@ $wpdb->query( "DROP TABLE IF EXISTS {$table}" );
 
 // Unschedule any pending cron events.
 foreach ( array( 'mmgwc_rotate_logs', 'mmgwc_subscriptions_cron' ) as $hook ) {
-	$timestamp = wp_next_scheduled( $hook );
-	while ( $timestamp ) {
-		wp_unschedule_event( $timestamp, $hook );
-		$timestamp = wp_next_scheduled( $hook );
-	}
+	wp_clear_scheduled_hook( $hook );
 }
 
 // Remove custom capabilities from every role.

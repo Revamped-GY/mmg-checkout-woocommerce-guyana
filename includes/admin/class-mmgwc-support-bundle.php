@@ -43,7 +43,7 @@ final class MMGWC_Support_Bundle {
 
 		echo '<tr><th scope="row">Order ID (optional)</th><td>';
 		echo '<input type="number" name="order_id" min="1" step="1" class="regular-text" placeholder="e.g. 1234" />';
-		echo '<p class="description">If selected, the bundle will include the order summary and MMG metadata for that order.</p>';
+		echo '<p class="description">If selected, the bundle will include a payment-focused order summary and MMG metadata. Customer name and email are excluded.</p>';
 		echo '</td></tr>';
 
 		echo '</table>';
@@ -157,6 +157,7 @@ final class MMGWC_Support_Bundle {
 		$lines[] = '';
 		$lines[] = 'Security:';
 		$lines[] = '- Secrets and tokens are redacted automatically.';
+		$lines[] = '- Customer name and email are excluded from order summaries.';
 		$lines[] = '- Do not share private key files via email or public links.';
 		$lines[] = '';
 		$lines[] = 'Support workflow:';
@@ -205,7 +206,7 @@ final class MMGWC_Support_Bundle {
 		}
 
 		return array(
-			'plugin_version' => defined( 'MMGWC_PLUGIN_VERSION' ) ? MMGWC_PLUGIN_VERSION : null,
+			'plugin_version' => defined( 'MMGWC_VERSION' ) ? MMGWC_VERSION : null,
 			'wp_version' => $wp_version,
 			'wc_version' => $wc_version,
 			'php_version' => $php_version,
@@ -230,9 +231,10 @@ final class MMGWC_Support_Bundle {
 		// Anything else is either partially redacted (known IDs) or fully redacted by default.
 		$safe_keys = array(
 			'enabled', 'mode', 'debug', 'title', 'description',
+			'checkout_guide_enabled', 'initiated_enabled', 'initiated_authorised', 'initiated_title', 'initiated_description',
 			'sandbox_checkout_url', 'live_checkout_url',
 			'sandbox_merchant_name', 'live_merchant_name',
-			'api_mwallet_base_url',
+			'api_mwallet_base_url', 'sandbox_api_mwallet_base_url', 'live_api_mwallet_base_url',
 			'currency_conversion', 'fx_cache_hours',
 			'status_success_virtual', 'status_success_physical',
 			'status_cancelled', 'status_failed', 'status_timeout',
@@ -243,7 +245,8 @@ final class MMGWC_Support_Bundle {
 		$partial_keys = array(
 			'sandbox_merchant_id', 'sandbox_client_id',
 			'live_merchant_id', 'live_client_id',
-			'api_wss_mid',
+			'api_wss_mid', 'sandbox_api_wss_mid', 'live_api_wss_mid',
+			'sandbox_api_credit_account_id', 'live_api_credit_account_id',
 		);
 
 		$out = array();
@@ -395,10 +398,8 @@ final class MMGWC_Support_Bundle {
 				'item_id' => $item_id,
 				'product_id' => $item->get_product_id(),
 				'variation_id' => $item->get_variation_id(),
-				'name' => $item->get_name(),
 				'quantity' => $item->get_quantity(),
 				'total' => $item->get_total(),
-				'subtotal' => $item->get_subtotal(),
 			);
 		}
 
@@ -429,8 +430,6 @@ final class MMGWC_Support_Bundle {
 			'created' => $order->get_date_created() ? $order->get_date_created()->date( 'c' ) : null,
 			'payment_method' => $order->get_payment_method(),
 			'payment_method_title' => $order->get_payment_method_title(),
-			'billing_email' => $order->get_billing_email(),
-			'billing_name' => trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ),
 			'items' => $items,
 			'mmg_meta' => $meta,
 		);

@@ -33,7 +33,7 @@ final class MMGWC_Secure_Store {
 		$auth = defined( 'AUTH_KEY' ) ? (string) AUTH_KEY : '';
 		$salt = defined( 'SECURE_AUTH_SALT' ) ? (string) SECURE_AUTH_SALT : '';
 		if ( $auth === '' && $salt === '' ) {
-			// Fallback – still site-specific.
+			// This fallback remains site-specific.
 			$auth = (string) wp_salt( 'auth' );
 			$salt = (string) wp_salt( 'secure_auth' );
 		}
@@ -52,18 +52,41 @@ final class MMGWC_Secure_Store {
 			return $plaintext;
 		}
 		if ( ! self::available() ) {
-			return $plaintext;
+			self::report_encryption_failure();
+			return '';
 		}
 		try {
 			$iv = random_bytes( 12 );
 			$tag = '';
 			$cipher = openssl_encrypt( $plaintext, self::CIPHER, self::key(), OPENSSL_RAW_DATA, $iv, $tag, '', 16 );
 			if ( $cipher === false ) {
-				return $plaintext;
+				self::report_encryption_failure();
+				return '';
 			}
 			return self::PREFIX . base64_encode( $iv . $tag . $cipher );
-		} catch ( Exception $e ) {
-			return $plaintext;
+		} catch ( Throwable $e ) {
+			self::report_encryption_failure();
+			return '';
+		}
+	}
+
+	/**
+	 * Encrypt a replacement value without erasing a value that is already stored.
+	 */
+	public static function encrypt_preserving_existing( string $plaintext, string $existing = '' ): string {
+		$encrypted = self::encrypt( $plaintext );
+		if ( $plaintext !== '' && $encrypted === '' ) {
+			return $existing;
+		}
+		return $encrypted;
+	}
+
+	private static function report_encryption_failure(): void {
+		$message = 'MMG protected credentials were not saved because secure encryption is unavailable.';
+		if ( class_exists( 'WC_Admin_Settings' ) && method_exists( 'WC_Admin_Settings', 'add_error' ) ) {
+			WC_Admin_Settings::add_error( $message );
+		} elseif ( function_exists( 'add_settings_error' ) ) {
+			add_settings_error( 'mmgwc_secure_store', 'mmgwc_encryption_unavailable', $message, 'error' );
 		}
 	}
 
@@ -100,6 +123,14 @@ final class MMGWC_Secure_Store {
 			'sandbox_private_key',
 			'live_secret_key',
 			'live_private_key',
+			'sandbox_api_key',
+			'sandbox_api_wss_mkey',
+			'sandbox_api_wss_msecret',
+			'sandbox_api_password',
+			'live_api_key',
+			'live_api_wss_mkey',
+			'live_api_wss_msecret',
+			'live_api_password',
 			'api_key',
 			'api_wss_mkey',
 			'api_wss_msecret',

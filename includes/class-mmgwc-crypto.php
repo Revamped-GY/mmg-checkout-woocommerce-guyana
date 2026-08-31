@@ -105,7 +105,7 @@ final class MMGWC_Crypto {
 
 		try {
 			return self::oaep_decode( $em, '' );
-		} catch ( Exception $e ) {
+		} catch ( Throwable $e ) {
 			throw new RuntimeException( 'Decryption error' );
 		}
 	}

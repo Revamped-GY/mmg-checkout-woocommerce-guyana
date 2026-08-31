@@ -2,6 +2,32 @@
 
 All notable changes to MMG Checkout for WooCommerce are recorded here. The format follows Keep a Changelog and the project follows Semantic Versioning.
 
+## [2.16.0] - 2026-08-31
+
+### Added
+
+- Compact hosted-checkout guidance with responsive image lightboxes and an on or off setting.
+- A disabled-by-default MMG app approval method with authenticated background reconciliation.
+
+### Changed
+
+- Creates a verified release after a version-bumped push reaches `main`, after PHP 7.4 to 8.3 validation.
+
+### Fixed
+
+- Corrected the GitHub update repository and moved SHA-256 verification before package installation.
+- Added a one-time verified legacy manifest bridge so existing released installations can discover 2.16.0.
+- Split API credentials by Sandbox and Live mode and corrected the published UAT API base path.
+- Added safe retry guidance for MMG's hosted Login and QR switching race.
+
+### Security
+
+- Added atomic provider transaction claims across orders.
+- Blocked uncertain initiation retries and kept pending or unclear payments unpaid for manual review.
+- Restricts paid and unpaid order status mappings to their correct payment states.
+- Required exact release asset names and verified package hashes after all update-download filters run.
+- Restricted credential-bearing API requests to MMG-controlled hosts by default.
+
 ## [2.15.0] - 2026-08-30
 
 ### Security
@@ -49,7 +75,7 @@ All notable changes to MMG Checkout for WooCommerce are recorded here. The forma
   the GitHub call fails (rate limit, network error, repo unavailable). This
   keeps existing 2.14.20 sites updatable even if GitHub is briefly
   unreachable. The constant can be removed in a future release once all
-  installs are on 2.14.21 or newer.
+  installs are on 2.16.0 or newer.
 
 ## [2.14.20] - 2026-04-15
 

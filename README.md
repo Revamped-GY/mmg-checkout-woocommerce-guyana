@@ -7,6 +7,8 @@ The plugin adds MMG as a payment method on classic and Block checkout, handles e
 ## Features
 
 - MMG payment method on classic checkout and WooCommerce Blocks checkout
+- Compact hosted-checkout guidance with responsive image previews
+- Optional MMG app approval requests, disabled until MMG authorises the merchant for this use
 - Sandbox (UAT) and Live mode with one-click switching
 - Credential importer that reads the standard MMG ZIP package (or `setup.cfg` plus `.pem` keys)
 - Resilient callback handling with three URL shapes accepted, idempotent processing and clear order notes
@@ -62,9 +64,13 @@ For invoice-style billing use **MMG Checkout → Payment Requests** to create a 
 
 ## Updates
 
-From version 2.14.21 onward updates are delivered through this repository's GitHub Releases. The plugin checks for the latest release every six hours, verifies the download is a `.zip` asset on a github.com host and applies the update through the standard WordPress upgrader. An optional SHA-256 sidecar file (`<filename>.zip.sha256`) attached to the release is verified before install.
+Version 2.16.0 corrects the GitHub update channel and requires a matching `.zip.sha256` sidecar before WordPress can install the ZIP. Versions 2.13.1 through 2.14.21 use the legacy manifest to receive the one-time 2.16.0 bridge, then use this repository for later releases. Update metadata is checked during normal WordPress update checks and successful responses are cached for six hours. A version-bumped push to `main` creates the matching release and installable assets after PHP 7.4 to 8.3 validation. Later pushes at the same version do not publish another update.
 
-From version 2.15.0, MMG Checkout requires the Merchant Initiated API credentials for authenticated Transaction Lookup. The payment method stays unavailable until those credentials are complete. A browser callback is treated as correlation data and an order is marked paid only after MMG confirms the transaction ID, amount, GYD currency, merchant and completed status.
+From version 2.15.0, MMG Checkout requires the Merchant Initiated API credentials for authenticated Transaction Lookup. Version 2.16.0 stores separate Sandbox and Live API values. The payment method stays unavailable until the active mode is complete. A browser callback is treated as correlation data and an order is marked paid only after MMG confirms the transaction ID, amount, GYD currency, merchant and completed status.
+
+The optional **Approve in the MMG app** method sends a payment request to the customer's registered phone number. It is disabled by default because MMG's public documentation describes the API primarily for in-store POS use. Enable it only after MMG confirms remote WooCommerce use, the Live API base URL, the merchant credit account ID and polling limits. Public documentation examples are not merchant credentials.
+
+Credential-bearing API requests are restricted to MMG-controlled domains by default. If MMG supplies a different production domain in writing, add only that domain through the `mmgwc_allowed_api_hosts` filter.
 
 If you need to point the updater somewhere else, the GitHub repository can be filtered:
 
@@ -78,7 +84,7 @@ add_filter( 'mmgwc_github_repo', function() {
 
 Please report security issues privately. See [SECURITY.md](SECURITY.md) for details. Do not open a public issue for anything that could be used to compromise a live store.
 
-The plugin handles encrypted MMG payment tokens, never logs raw secrets or PEM blocks, encrypts protected settings at rest and rejects update packages whose hash does not match the declared SHA-256 when one is provided.
+The plugin handles encrypted MMG payment tokens, never logs raw secrets or PEM blocks, encrypts protected settings at rest and refuses GitHub update packages without a matching SHA-256 checksum.
 
 ## Troubleshooting
 
@@ -86,6 +92,7 @@ The plugin handles encrypted MMG payment tokens, never logs raw secrets or PEM b
 - The Logs page shows recent plugin log entries with secrets redacted. Enable Debug logging in Settings before reproducing an issue.
 - The Support Bundle on the Support page produces a single ZIP with diagnostics and redacted logs. Send that to support instead of screenshots.
 - "Unable to process your request" on the MMG page after an abandoned attempt means MMG saw a duplicate `merchantTransactionId`. Plugin versions 2.14.20 and later regenerate this on every retry, so an upgrade resolves it.
+- MMG's hosted page can create overlapping QR requests when a customer switches quickly between Pay with QR and Login. Return to checkout and start a fresh session. This race is inside MMG's page, so the plugin cannot cancel those requests directly.
 
 ## Changelog
 

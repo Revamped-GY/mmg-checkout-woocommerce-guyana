@@ -177,13 +177,22 @@ final class MMGWC_Diagnostics {
 			"define('MMGWC_LIVE_SECRET_KEY', '...');\n" .
 			"define('MMGWC_LIVE_PUBLIC_KEY', " . '"' . "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----" . '"' . ");\n" .
 			"define('MMGWC_LIVE_PRIVATE_KEY', " . '"' . "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----" . '"' . ");\n\n" .
-			"// Required: Merchant Initiated API verification\n" .
-			"define('MMGWC_MWALLET_BASE_URL', 'https://mwallet.mmgtest.net/mwallet/v1');\n" .
-			"define('MMGWC_API_KEY', '...');\n" .
-			"define('MMGWC_WSS_MID', '...');\n" .
-			"define('MMGWC_WSS_MKEY', '...');\n" .
-			"define('MMGWC_WSS_MSECRET', '...');\n" .
-			"define('MMGWC_API_PASSWORD', '...');\n"
+			"// Sandbox API verification and optional approval requests\n" .
+			"define('MMGWC_SANDBOX_MWALLET_BASE_URL', 'https://mwallet.mmgtest.net/olive/publisher/v1');\n" .
+			"define('MMGWC_SANDBOX_API_KEY', '...');\n" .
+			"define('MMGWC_SANDBOX_WSS_MID', '...');\n" .
+			"define('MMGWC_SANDBOX_WSS_MKEY', '...');\n" .
+			"define('MMGWC_SANDBOX_WSS_MSECRET', '...');\n" .
+			"define('MMGWC_SANDBOX_API_PASSWORD', '...');\n" .
+			"define('MMGWC_SANDBOX_API_CREDIT_ACCOUNT_ID', '...');\n\n" .
+			"// Live API values must be issued by MMG\n" .
+			"define('MMGWC_LIVE_MWALLET_BASE_URL', '...');\n" .
+			"define('MMGWC_LIVE_API_KEY', '...');\n" .
+			"define('MMGWC_LIVE_WSS_MID', '...');\n" .
+			"define('MMGWC_LIVE_WSS_MKEY', '...');\n" .
+			"define('MMGWC_LIVE_WSS_MSECRET', '...');\n" .
+			"define('MMGWC_LIVE_API_PASSWORD', '...');\n" .
+			"define('MMGWC_LIVE_API_CREDIT_ACCOUNT_ID', '...');\n"
 		);
 		echo '</pre>';
 

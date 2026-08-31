@@ -5,27 +5,41 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class MMGWC_API {
+	private const MAX_RESPONSE_BYTES = 1048576;
+	private const DEFAULT_TOKEN_TTL = 90;
+
 	/**
-	 * @param array $config
+	 * Obtain and briefly cache MMG's short-lived resource token.
+	 *
 	 * @return string|null
 	 */
-	public static function get_resource_token( array $config ) {
-		$base = trim( $config['mwallet_base_url'] ?? '' );
-		$api_key = trim( $config['api_key'] ?? '' );
-		$username = trim( $config['wss_mid'] ?? '' );
-		$password = trim( $config['password'] ?? '' );
+	public static function get_resource_token( array $config, bool $force_refresh = false ) {
+		$base = trim( (string) ( $config['mwallet_base_url'] ?? '' ) );
+		$api_key = trim( (string) ( $config['api_key'] ?? '' ) );
+		$username = trim( (string) ( $config['wss_mid'] ?? '' ) );
+		$password = trim( (string) ( $config['password'] ?? '' ) );
 
-		if ( $base === '' || $api_key === '' || $username === '' || $password === '' || ! self::is_valid_base_url( $base ) ) {
+		if ( $base === '' || $api_key === '' || $username === '' || $password === '' || ! self::is_valid_base_url( $base, $config ) ) {
 			return null;
 		}
 
-		$url = rtrim( $base, '/' ) . '/e-commerce-login/mer';
+		$cache_key = self::token_cache_key( $config );
+		if ( ! $force_refresh ) {
+			$cached = get_transient( $cache_key );
+			if ( is_string( $cached ) && $cached !== '' ) {
+				return $cached;
+			}
+		}
+		delete_transient( $cache_key );
 
-		$resp = wp_remote_post(
+		$url = rtrim( $base, '/' ) . '/e-commerce-login/mer';
+		$resp = wp_safe_remote_post(
 			$url,
 			array(
 				'timeout' => 20,
+				'reject_unsafe_urls' => true,
 				'headers' => array(
+					'Accept' => 'application/json',
 					'Content-Type' => 'application/x-www-form-urlencoded',
 				),
 				'body' => array(
@@ -42,90 +56,267 @@ final class MMGWC_API {
 			return null;
 		}
 
-		$code = wp_remote_retrieve_response_code( $resp );
-		$body = wp_remote_retrieve_body( $resp );
+		$code = (int) wp_remote_retrieve_response_code( $resp );
+		$body = (string) wp_remote_retrieve_body( $resp );
 		if ( $code < 200 || $code >= 300 ) {
 			MMGWC_Logger::warning( 'MMG API login non-2xx: ' . $code );
 			return null;
 		}
-		if ( strlen( $body ) > 1048576 ) {
+		if ( strlen( $body ) > self::MAX_RESPONSE_BYTES ) {
 			MMGWC_Logger::warning( 'MMG API login response too large, ignoring.' );
 			return null;
 		}
 
 		$data = json_decode( $body, true );
-		$token = $data['access_token'] ?? null;
-		return is_string( $token ) ? $token : null;
+		$token = is_array( $data ) ? ( $data['access_token'] ?? null ) : null;
+		if ( ! is_string( $token ) || $token === '' || strlen( $token ) > 4096 ) {
+			return null;
+		}
+
+		$expires_in = isset( $data['expires_in'] ) && is_numeric( $data['expires_in'] ) ? (int) $data['expires_in'] : 120;
+		$ttl = min( self::DEFAULT_TOKEN_TTL, $expires_in - 30 );
+		if ( $ttl >= 5 ) {
+			set_transient( $cache_key, $token, $ttl );
+		}
+		return $token;
 	}
 
 	/**
-	 * Authenticated transaction lookup (Merchant Initiated API).
-	 *
-	 * A successful lookup is required before an order can be marked as paid.
+	 * Authenticated transaction lookup. A successful lookup is required before
+	 * an order can be marked as paid.
 	 */
 	public static function transaction_lookup( array $config, string $transaction_id ) {
-		$base = trim( $config['mwallet_base_url'] ?? '' );
-		$api_key = trim( $config['api_key'] ?? '' );
-		$wss_mid = trim( $config['wss_mid'] ?? '' );
-		$wss_mkey = trim( $config['wss_mkey'] ?? '' );
-		$wss_msecret = trim( $config['wss_msecret'] ?? '' );
-
-		if ( $base === '' || $api_key === '' || $wss_mid === '' || $wss_mkey === '' || $wss_msecret === '' || preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 || ! self::is_valid_base_url( $base ) ) {
+		$transaction_id = trim( $transaction_id );
+		if ( preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 || ! self::has_request_credentials( $config ) ) {
 			return null;
 		}
 
-		$token = $config['wss_token'] ?? '';
-		if ( ! is_string( $token ) || $token === '' ) {
-			$token = self::get_resource_token( $config );
-			if ( ! $token ) {
+		$url = rtrim( (string) $config['mwallet_base_url'], '/' ) . '/e-merchant-initiated-transactions/lookup';
+		$url = add_query_arg( array( 'transactionId' => $transaction_id ), $url );
+		return self::authenticated_request( 'GET', $url, $config );
+	}
+
+	/**
+	 * Send an MMG approval request. A successful response is pending, not paid.
+	 */
+	public static function initiate_payment( array $config, string $customer_account, string $amount, string $correlation_id = '' ) {
+		$customer_account = self::normalise_customer_account( $customer_account );
+		$amount = self::normalise_amount( $amount );
+		$credit_account = trim( (string) ( $config['credit_account_id'] ?? '' ) );
+		if ( $customer_account === '' || $amount === '' || $credit_account === '' || ! self::has_request_credentials( $config ) ) {
+			return new WP_Error( 'mmgwc_invalid_initiated_request', 'The MMG approval request is not configured correctly.' );
+		}
+
+		$url = rtrim( (string) $config['mwallet_base_url'], '/' ) . '/e-merchant-initiated-transactions/payment';
+		$url = add_query_arg( array( 'merchant_msisdn' => (string) $config['wss_mid'] ), $url );
+		$body = array(
+			'amount' => $amount,
+			'currency' => 'GYD',
+			'subType' => 'merinipmt',
+			'type' => 'transfer',
+			'debitParty' => array(
+				array(
+					'key' => 'accountid',
+					'value' => $customer_account,
+				),
+			),
+			'creditParty' => array(
+				array(
+					'key' => 'accountid',
+					'value' => $credit_account,
+				),
+			),
+		);
+
+		$data = self::authenticated_request( 'POST', $url, $config, $body, $correlation_id );
+		if ( ! is_array( $data ) ) {
+			return new WP_Error( 'mmgwc_initiated_api_failed', 'MMG did not accept the approval request.' );
+		}
+		return $data;
+	}
+
+	/**
+	 * Extract the only reference that can be reconciled safely.
+	 */
+	public static function initiated_reference( array $response ) {
+		$object_reference = self::scalar_string( $response['objectReference'] ?? '' );
+		$execution_id = self::scalar_string( $response['executionId'] ?? '' );
+		if ( $object_reference !== '' && $execution_id !== '' && ! hash_equals( $object_reference, $execution_id ) ) {
+			return new WP_Error( 'mmgwc_ambiguous_initiated_reference', 'MMG returned different payment references. The order was not marked as paid.' );
+		}
+		$reference = $execution_id !== '' ? $execution_id : $object_reference;
+		if ( preg_match( '/^\d{1,64}$/', $reference ) !== 1 ) {
+			return new WP_Error( 'mmgwc_invalid_initiated_reference', 'MMG did not return a valid payment reference.' );
+		}
+		return $reference;
+	}
+
+	/**
+	 * Accept a local seven-digit MMG number or the same number prefixed by 592.
+	 */
+	public static function normalise_customer_account( string $value ): string {
+		$value = trim( $value );
+		if ( $value === '' || preg_match( '/^[+0-9\s().-]+$/', $value ) !== 1 ) {
+			return '';
+		}
+		$digits = preg_replace( '/\D+/', '', $value );
+		if ( ! is_string( $digits ) ) {
+			return '';
+		}
+		if ( strlen( $digits ) === 10 && strpos( $digits, '592' ) === 0 ) {
+			$digits = substr( $digits, 3 );
+		}
+		return preg_match( '/^\d{7}$/', $digits ) === 1 ? $digits : '';
+	}
+
+	private static function authenticated_request( string $method, string $url, array $config, ?array $body = null, string $correlation_id = '' ) {
+		if ( preg_match( '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i', $correlation_id ) !== 1 ) {
+			$correlation_id = wp_generate_uuid4();
+		}
+		for ( $attempt = 0; $attempt < 2; $attempt++ ) {
+			$token = isset( $config['wss_token'] ) && is_string( $config['wss_token'] ) && $config['wss_token'] !== '' && $attempt === 0
+				? $config['wss_token']
+				: self::get_resource_token( $config, $attempt > 0 );
+			if ( ! is_string( $token ) || $token === '' ) {
 				return null;
+			}
+
+			$args = array(
+				'timeout' => 20,
+				'reject_unsafe_urls' => true,
+				'headers' => array(
+					'Accept' => 'application/json',
+					'Content-Type' => 'application/json',
+					'x-wss-mid' => (string) $config['wss_mid'],
+					'x-wss-mkey' => (string) $config['wss_mkey'],
+					'x-wss-msecret' => (string) $config['wss_msecret'],
+					'x-api-key' => (string) $config['api_key'],
+					'x-wss-token' => $token,
+					'x-wss-correlationid' => $correlation_id,
+				),
+			);
+			if ( $body !== null ) {
+				$args['body'] = wp_json_encode( $body );
+			}
+
+			$resp = strtoupper( $method ) === 'POST'
+				? wp_safe_remote_post( $url, $args )
+				: wp_safe_remote_get( $url, $args );
+			if ( is_wp_error( $resp ) ) {
+				MMGWC_Logger::warning( 'MMG API request failed: ' . $resp->get_error_message() );
+				return null;
+			}
+
+			$code = (int) wp_remote_retrieve_response_code( $resp );
+			if ( in_array( $code, array( 401, 403 ), true ) && $attempt === 0 ) {
+				delete_transient( self::token_cache_key( $config ) );
+				continue;
+			}
+			$raw = (string) wp_remote_retrieve_body( $resp );
+			if ( $code < 200 || $code >= 300 ) {
+				MMGWC_Logger::warning( 'MMG API request non-2xx: ' . $code );
+				return null;
+			}
+			if ( strlen( $raw ) > self::MAX_RESPONSE_BYTES ) {
+				MMGWC_Logger::warning( 'MMG API response too large, ignoring.' );
+				return null;
+			}
+
+			$data = json_decode( $raw, true );
+			return is_array( $data ) ? $data : null;
+		}
+		return null;
+	}
+
+	private static function has_request_credentials( array $config ): bool {
+		foreach ( array( 'mwallet_base_url', 'api_key', 'wss_mid', 'wss_mkey', 'wss_msecret', 'password' ) as $key ) {
+			if ( ! isset( $config[ $key ] ) || ! is_scalar( $config[ $key ] ) || trim( (string) $config[ $key ] ) === '' ) {
+				return false;
+			}
+		}
+		return self::is_valid_base_url( (string) $config['mwallet_base_url'], $config );
+	}
+
+	private static function normalise_amount( string $amount ): string {
+		$amount = str_replace( ',', '', trim( $amount ) );
+		if ( preg_match( '/^(\d+)(?:\.(\d{1,2}))?$/', $amount, $matches ) !== 1 ) {
+			return '';
+		}
+		$whole = ltrim( $matches[1], '0' );
+		$whole = $whole === '' ? '0' : $whole;
+		$fraction = isset( $matches[2] ) ? str_pad( $matches[2], 2, '0' ) : '00';
+		if ( $whole === '0' && $fraction === '00' ) {
+			return '';
+		}
+		return $whole . '.' . $fraction;
+	}
+
+	private static function token_cache_key( array $config ): string {
+		$fingerprint = hash(
+			'sha256',
+			implode(
+				'|',
+				array(
+					(string) ( $config['mode'] ?? '' ),
+					(string) ( $config['mwallet_base_url'] ?? '' ),
+					(string) ( $config['api_key'] ?? '' ),
+					(string) ( $config['wss_mid'] ?? '' ),
+					(string) ( $config['password'] ?? '' ),
+				)
+			)
+		);
+		return 'mmgwc_api_token_' . substr( $fingerprint, 0, 24 );
+	}
+
+	private static function scalar_string( $value ): string {
+		return is_scalar( $value ) ? trim( (string) $value ) : '';
+	}
+
+	/**
+	 * Validate a credential-bearing MMG API base URL.
+	 *
+	 * Stores can add a written-MMG-approved production domain through
+	 * `mmgwc_allowed_api_hosts`. Each entry permits that host and its subdomains.
+	 */
+	public static function is_valid_base_url( string $base, array $config = array() ): bool {
+		$parts = wp_parse_url( $base );
+		if ( ! is_array( $parts )
+			|| strtolower( (string) ( $parts['scheme'] ?? '' ) ) !== 'https'
+			|| empty( $parts['host'] )
+			|| isset( $parts['user'] )
+			|| isset( $parts['pass'] )
+			|| isset( $parts['query'] )
+			|| isset( $parts['fragment'] )
+			|| ( isset( $parts['port'] ) && (int) $parts['port'] !== 443 )
+		) {
+			MMGWC_Logger::warning( 'MMG API base URL must be a valid HTTPS URL without credentials, query values or a non-standard port.' );
+			return false;
+		}
+
+		$mode = isset( $config['mode'] ) && is_scalar( $config['mode'] ) ? strtolower( trim( (string) $config['mode'] ) ) : '';
+		$default_hosts = $mode === 'sandbox'
+			? array( 'mmgtest.net' )
+			: ( $mode === 'live' ? array( 'mmg.gy', 'mymmg.gy' ) : array( 'mmgtest.net', 'mmg.gy', 'mymmg.gy' ) );
+		$allowed_hosts = apply_filters( 'mmgwc_allowed_api_hosts', $default_hosts, $mode, $base );
+		if ( ! is_array( $allowed_hosts ) ) {
+			$allowed_hosts = $default_hosts;
+		}
+
+		$host = strtolower( rtrim( trim( (string) $parts['host'] ), '.' ) );
+		foreach ( $allowed_hosts as $allowed_host ) {
+			if ( ! is_scalar( $allowed_host ) ) {
+				continue;
+			}
+			$allowed_host = strtolower( trim( (string) $allowed_host, " \t\n\r\0\x0B." ) );
+			if ( $allowed_host === '' ) {
+				continue;
+			}
+			if ( $host === $allowed_host || substr( $host, -( strlen( $allowed_host ) + 1 ) ) === '.' . $allowed_host ) {
+				return true;
 			}
 		}
 
-		$url = rtrim( $base, '/' ) . '/e-merchant-initiated-transactions/lookup';
-		$url = add_query_arg( array( 'transactionId' => $transaction_id ), $url );
-
-		$resp = wp_remote_get(
-			$url,
-			array(
-				'timeout' => 20,
-				'headers' => array(
-					'x-wss-mid' => $wss_mid,
-					'x-wss-mkey' => $wss_mkey,
-					'x-wss-msecret' => $wss_msecret,
-					'x-api-key' => $api_key,
-					'x-wss-token' => $token,
-					'x-wss-correlationid' => wp_generate_uuid4(),
-				),
-			)
-		);
-
-		if ( is_wp_error( $resp ) ) {
-			MMGWC_Logger::warning( 'MMG transaction lookup failed: ' . $resp->get_error_message() );
-			return null;
-		}
-
-		$code = wp_remote_retrieve_response_code( $resp );
-		$body = wp_remote_retrieve_body( $resp );
-		if ( $code < 200 || $code >= 300 ) {
-			MMGWC_Logger::warning( 'MMG transaction lookup non-2xx: ' . $code );
-			return null;
-		}
-		if ( strlen( $body ) > 1048576 ) {
-			MMGWC_Logger::warning( 'MMG transaction lookup response too large, ignoring.' );
-			return null;
-		}
-
-		$data = json_decode( $body, true );
-		return is_array( $data ) ? $data : null;
-	}
-
-	private static function is_valid_base_url( string $base ): bool {
-		$parts = wp_parse_url( $base );
-		if ( ! is_array( $parts ) || strtolower( (string) ( $parts['scheme'] ?? '' ) ) !== 'https' || empty( $parts['host'] ) ) {
-			MMGWC_Logger::warning( 'MMG API base URL must be a valid HTTPS URL.' );
-			return false;
-		}
-		return true;
+		MMGWC_Logger::warning( 'MMG API base URL host is not on the approved MMG host list.' );
+		return false;
 	}
 }

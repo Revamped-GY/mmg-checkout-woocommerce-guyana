@@ -22,12 +22,18 @@
 
 	const settings = getSetting( 'mmg_checkout_data', {} );
 	const label = decodeEntities( settings.title || 'MMG' );
-	const description = decodeEntities( settings.description || 'You will be redirected to MMG to complete your payment.' );
+	const hasDescription = Object.prototype.hasOwnProperty.call( settings, 'description' );
+	const hasContentHtml = Object.prototype.hasOwnProperty.call( settings, 'content_html' );
+	const description = decodeEntities( hasDescription ? settings.description : 'You will be redirected to MMG to complete your payment.' );
+	const contentHtml = hasContentHtml ? settings.content_html : '';
 	const iconUrl = settings.icon_url || '';
+	const currencyAvailable = settings.currency_available !== false;
 
 	const features = ( settings.supports && settings.supports.features ) ? settings.supports.features : [ 'products' ];
 
-	const Content = () => createElement( 'div', null, description );
+	const Content = () => hasContentHtml
+		? createElement( 'div', { dangerouslySetInnerHTML: { __html: contentHtml } } )
+		: createElement( 'div', null, description );
 
 	const Label = () => createElement(
 		'span',
@@ -45,7 +51,7 @@
 		name: 'mmg_checkout',
 		label: createElement( Label, null ),
 		ariaLabel: label,
-		canMakePayment: () => true,
+		canMakePayment: () => currencyAvailable,
 		content: createElement( Content, null ),
 		edit: createElement( Content, null ),
 		supports: {

@@ -136,7 +136,7 @@ final class MMGWC_Callback {
 
 		try {
 			$response = $gateway->decrypt_mmg_response( $token );
-		} catch ( Exception $e ) {
+		} catch ( Throwable $e ) {
 			MMGWC_Logger::error( 'MMG callback: decrypt failed' );
 			self::render_error( 'We could not read the MMG response.', 400 );
 			return;
@@ -144,14 +144,31 @@ final class MMGWC_Callback {
 
 		MMGWC_Logger::debug( 'MMG callback decrypted' );
 
-		$order = $gateway->resolve_order_from_mmg_response( $response );
-		if ( ! $order ) {
-			MMGWC_Logger::error( 'MMG callback: could not resolve order' );
-			self::render_error( 'We could not match this payment to an order.', 404 );
+		try {
+			$order = $gateway->resolve_order_from_mmg_response( $response );
+			if ( ! $order ) {
+				$queued = method_exists( $gateway, 'queue_unresolved_mmg_response' ) && $gateway->queue_unresolved_mmg_response( $response );
+				if ( $queued ) {
+					MMGWC_Logger::warning( 'MMG callback order load failed; response queued for recovery' );
+					self::render_error( 'Your MMG payment response was received and is being checked. Please do not pay again.', 202 );
+					return;
+				}
+				MMGWC_Logger::error( 'MMG callback: could not resolve order' );
+				self::render_error( 'We could not match this payment to an order.', 404 );
+				return;
+			}
+			$redirect_url = $gateway->handle_mmg_response_for_order( $order, $response );
+		} catch ( Throwable $exception ) {
+			$queued = method_exists( $gateway, 'queue_unresolved_mmg_response' ) && $gateway->queue_unresolved_mmg_response( $response );
+			MMGWC_Logger::error( 'MMG callback handling failed after decryption', array( 'queued' => $queued, 'reason' => $exception->getMessage() ) );
+			self::render_error(
+				$queued
+					? 'Your MMG payment response was received and is being checked. Please do not pay again.'
+					: 'Your MMG payment response needs store review. Please do not pay again.',
+				$queued ? 202 : 500
+			);
 			return;
 		}
-
-		$redirect_url = $gateway->handle_mmg_response_for_order( $order, $response );
 		if ( is_string( $redirect_url ) && $redirect_url !== '' ) {
 			wp_safe_redirect( $redirect_url );
 			exit;

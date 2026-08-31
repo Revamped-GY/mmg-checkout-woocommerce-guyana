@@ -5,7 +5,7 @@ Requires at least: 6.0
 Tested up to: 6.9.1
 Tested with: 6.9.1
 Requires PHP: 7.4
-Stable tag: 2.15.0
+Stable tag: 2.16.0
 License: GPLv2 or later
 
 == Description ==
@@ -19,6 +19,8 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 * Live and Sandbox modes that you can switch any time
 * MMG credential Importer (upload the MMG zip, or upload setup.cfg plus public and private keys)
 * Works with WooCommerce Block Checkout
+* Optional short hosted-checkout walkthrough with responsive image previews
+* Optional MMG app approval request method, disabled until MMG authorises it
 * Order notes and stored MMG transaction details for audit and support
 * Strong callback handling with duplicate callback protection (idempotency)
 * Clear status mapping with better customer messages
@@ -94,6 +96,16 @@ Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re imp
 
 == Changelog ==
 
+= 2.16.0 =
+
+* Added a compact Login and QR walkthrough with responsive lightbox previews and an on or off setting.
+* Added a disabled-by-default MMG app approval method with authenticated polling and fail-closed payment verification.
+* Split API credentials by Sandbox and Live mode and updated the public UAT API base path.
+* Fixed the GitHub repository and moved package verification before installation.
+* Added a one-time verified legacy manifest bridge for existing released installations.
+* Added automatic versioned releases for main-branch version updates.
+* Added guidance for the confirmed Login and QR switching race on MMG's hosted page.
+* Required exact release asset names and verified package hashes after all update-download filters run.
 
 = 2.15.0 =
 
@@ -109,7 +121,7 @@ Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re imp
 * Switched the plugin update channel to GitHub Releases. The plugin now reads the latest release from the project's GitHub repository, finds the attached ZIP and optional SHA-256 sidecar and installs it through the standard WordPress upgrader. The repo is filterable via `mmgwc_github_repo` and the allowed download hosts via `mmgwc_update_allowed_hosts`. An optional `mmgwc_github_token` filter is available for higher API rate limits.
 * Tightened updater safety: HTTPS required for both the API call and the package download, hosts restricted to github.com and objects.githubusercontent.com by default, pre-releases and drafts ignored, version downgrades rejected.
 * Plugin details modal now sources Tested up to, Requires at least and Requires PHP from the local readme.txt so the WP UI always shows accurate compatibility info.
-* The legacy self-hosted JSON manifest is still consulted as a fallback if the GitHub call fails. Removable in a future release once all sites are on 2.14.21 or newer.
+* The legacy self-hosted JSON manifest is still consulted as a fallback if the GitHub call fails. Removable in a future release once all sites are on 2.16.0 or newer.
 
 = 2.14.20 =
 
