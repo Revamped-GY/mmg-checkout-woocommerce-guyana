@@ -2,6 +2,14 @@
 
 All notable changes to MMG Checkout for WooCommerce are recorded here. The format follows Keep a Changelog and the project follows Semantic Versioning.
 
+## [2.16.1] - 2026-08-31
+
+### Fixed
+
+- Renamed the shared API fields to Transaction Verification and separated approval-only settings.
+- Prevented protected plaintext and encrypted storage values from appearing in settings forms.
+- Preserved stored credentials when replacement fields are left blank and flagged unreadable values for re-entry.
+
 ## [2.16.0] - 2026-08-31
 
 ### Added

@@ -5,7 +5,7 @@ Requires at least: 6.0
 Tested up to: 6.9.1
 Tested with: 6.9.1
 Requires PHP: 7.4
-Stable tag: 2.16.0
+Stable tag: 2.16.1
 License: GPLv2 or later
 
 == Description ==
@@ -50,7 +50,7 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 2. Choose your Mode: Sandbox or Live
 3. Go to WP Admin → MMG Checkout → Importer
 4. Upload the zip you received from MMG, or upload setup.cfg and key files separately
-5. Enter the Merchant Initiated API credentials used for authenticated Transaction Lookup
+5. Enter the Transaction Verification API credentials used for authenticated Transaction Lookup
 6. Go to WP Admin → MMG Checkout → Diagnostics and copy the Callback URL
 7. Send that Callback URL to MMG Merchant Services during your credential request (UAT or Live)
 8. Run a test order and confirm the order status updates and emails are sent
@@ -95,6 +95,12 @@ Confirm the callback URL in MMG Merchant Services matches the URL shown in Diagn
 Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re import the correct files for the current mode.
 
 == Changelog ==
+
+= 2.16.1 =
+
+* Renamed the shared API fields to Transaction Verification and separated approval-only settings.
+* Prevented protected plaintext and encrypted storage values from appearing in settings forms.
+* Preserved stored credentials when replacement fields are left blank and flagged unreadable values for re-entry.
 
 = 2.16.0 =
 

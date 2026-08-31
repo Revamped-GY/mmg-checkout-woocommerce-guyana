@@ -56,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           php tests/run-atomic-option-tests.php
+          php tests/run-credential-settings-tests.php
           php tests/run-payment-context-tests.php
           php tests/run-hosted-legacy-session-tests.php
           php tests/run-payment-verifier-tests.php
