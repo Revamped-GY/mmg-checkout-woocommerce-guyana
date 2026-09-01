@@ -7,6 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class MMGWC_API {
 	private const MAX_RESPONSE_BYTES = 1048576;
 	private const DEFAULT_TOKEN_TTL = 90;
+	private static $last_token_error_code = '';
 
 	/**
 	 * Obtain and briefly cache MMG's short-lived resource token.
@@ -14,12 +15,14 @@ final class MMGWC_API {
 	 * @return string|null
 	 */
 	public static function get_resource_token( array $config, bool $force_refresh = false ) {
+		self::$last_token_error_code = '';
 		$base = trim( (string) ( $config['mwallet_base_url'] ?? '' ) );
 		$api_key = trim( (string) ( $config['api_key'] ?? '' ) );
 		$username = trim( (string) ( $config['wss_mid'] ?? '' ) );
 		$password = trim( (string) ( $config['password'] ?? '' ) );
 
 		if ( $base === '' || $api_key === '' || $username === '' || $password === '' || ! self::is_valid_base_url( $base, $config ) ) {
+			self::$last_token_error_code = 'mmgwc_initiated_authentication_failed';
 			return null;
 		}
 
@@ -52,24 +55,27 @@ final class MMGWC_API {
 		);
 
 		if ( is_wp_error( $resp ) ) {
+			self::$last_token_error_code = 'mmgwc_initiated_authentication_failed';
 			MMGWC_Logger::warning( 'MMG API login failed: ' . $resp->get_error_message() );
 			return null;
 		}
 
 		$code = (int) wp_remote_retrieve_response_code( $resp );
 		$body = (string) wp_remote_retrieve_body( $resp );
+		$data = strlen( $body ) <= self::MAX_RESPONSE_BYTES ? json_decode( $body, true ) : null;
 		if ( $code < 200 || $code >= 300 ) {
-			MMGWC_Logger::warning( 'MMG API login non-2xx: ' . $code );
+			self::record_token_failure( $code, $data );
 			return null;
 		}
 		if ( strlen( $body ) > self::MAX_RESPONSE_BYTES ) {
+			self::$last_token_error_code = 'mmgwc_initiated_authentication_failed';
 			MMGWC_Logger::warning( 'MMG API login response too large, ignoring.' );
 			return null;
 		}
 
-		$data = json_decode( $body, true );
 		$token = is_array( $data ) ? ( $data['access_token'] ?? null ) : null;
 		if ( ! is_string( $token ) || $token === '' || strlen( $token ) > 4096 ) {
+			self::record_token_failure( $code, $data );
 			return null;
 		}
 
@@ -79,6 +85,13 @@ final class MMGWC_API {
 			set_transient( $cache_key, $token, $ttl );
 		}
 		return $token;
+	}
+
+	/**
+	 * Return the last safe authentication failure classification.
+	 */
+	public static function last_token_error_code(): string {
+		return self::$last_token_error_code;
 	}
 
 	/**
@@ -184,8 +197,12 @@ final class MMGWC_API {
 				? $config['wss_token']
 				: self::get_resource_token( $config, $attempt > 0 );
 			if ( ( ! is_string( $token ) || $token === '' ) && $token_required ) {
+				$error_code = self::last_token_error_code();
+				if ( $error_code === '' ) {
+					$error_code = 'mmgwc_initiated_authentication_failed';
+				}
 				return $return_errors
-					? new WP_Error( 'mmgwc_initiated_authentication_failed', 'MMG did not accept the API sign-in. Check the optional Initiated API details and try again.' )
+					? new WP_Error( $error_code, self::token_error_message( $error_code ) )
 					: null;
 			}
 
@@ -255,6 +272,39 @@ final class MMGWC_API {
 				: null;
 		}
 		return null;
+	}
+
+	private static function record_token_failure( int $http_code, $data ): void {
+		$status_code = self::scalar_string( is_array( $data ) ? ( $data['statusCode'] ?? '' ) : '' );
+		$message = strtoupper( self::scalar_string( is_array( $data ) ? ( $data['message'] ?? '' ) : '' ) );
+
+		if ( $status_code === '315' || $message === 'USER_ACCOUNT_LOCKED' ) {
+			self::$last_token_error_code = 'mmgwc_initiated_account_locked';
+		} elseif ( $status_code === '102' || $message === 'INVALID_CREDENTIALS' || in_array( $http_code, array( 401, 403, 422 ), true ) ) {
+			self::$last_token_error_code = 'mmgwc_initiated_invalid_credentials';
+		} else {
+			self::$last_token_error_code = 'mmgwc_initiated_authentication_failed';
+		}
+
+		$safe_status = preg_replace( '/[^A-Za-z0-9_.-]/', '', $status_code ) ?? '';
+		MMGWC_Logger::warning(
+			'MMG API login rejected',
+			array(
+				'http_code' => $http_code,
+				'reason' => self::$last_token_error_code,
+				'provider_status' => substr( $safe_status, 0, 32 ),
+			)
+		);
+	}
+
+	private static function token_error_message( string $error_code ): string {
+		if ( $error_code === 'mmgwc_initiated_account_locked' ) {
+			return 'The store\'s MMG Initiated API account is locked. No request was sent to the app. Choose MMG hosted checkout or another payment method.';
+		}
+		if ( $error_code === 'mmgwc_initiated_invalid_credentials' ) {
+			return 'MMG rejected the store\'s Initiated API sign-in. No request was sent to the app. Choose MMG hosted checkout or another payment method.';
+		}
+		return 'MMG did not accept the API sign-in. Check the optional Initiated API details and try again.';
 	}
 
 	private static function has_request_credentials( array $config ): bool {

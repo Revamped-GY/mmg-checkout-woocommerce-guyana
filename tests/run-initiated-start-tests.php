@@ -517,6 +517,18 @@ initiated_start_check( MMGWC_API::$initiate_calls === 2, 'A retry after a defini
 initiated_start_check( $order->get_status() === 'on-hold' && $order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'pending', 'A successful retry enters the normal pending approval state.' );
 
 $order = new_initiated_start_order();
+MMGWC_API::$initiate_result = new WP_Error(
+	'mmgwc_initiated_account_locked',
+	'The store\'s MMG Initiated API account is locked. No request was sent to the app. Choose MMG hosted checkout or another payment method.'
+);
+$locked_outcome = invoke_initiated_start( $order );
+$locked_result = $locked_outcome['result'];
+initiated_start_check( is_wp_error( $locked_result ) && $locked_result->get_error_code() === 'mmgwc_initiated_not_sent', 'A locked merchant API account is a definite not-sent result.' );
+initiated_start_check( strpos( $locked_result->get_error_message(), 'account is locked' ) !== false, 'Checkout explains that the store API account is locked.' );
+initiated_start_check( $order->get_status() === 'pending' && $order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'not_sent', 'A locked account restores a retryable unpaid order.' );
+initiated_start_check( $order->get_meta( MMGWC_META_INITIATED_CORRELATION ) === '', 'A locked account clears the unsent request correlation.' );
+
+$order = new_initiated_start_order();
 MMGWC_API::$initiate_result = new WP_Error( 'mmgwc_initiated_transport_uncertain', 'The connection ended without a final response.' );
 $outcome = invoke_initiated_start( $order );
 $result = $outcome['result'];

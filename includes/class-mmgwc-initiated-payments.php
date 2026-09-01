@@ -166,10 +166,13 @@ final class MMGWC_Initiated_Payments {
 			);
 			if ( is_wp_error( $response ) ) {
 				$reason = $response->get_error_code();
-				if ( in_array( $reason, array( 'mmgwc_invalid_initiated_request', 'mmgwc_initiated_authentication_failed', 'mmgwc_initiated_rejected' ), true ) ) {
+				if ( in_array( $reason, array( 'mmgwc_invalid_initiated_request', 'mmgwc_initiated_authentication_failed', 'mmgwc_initiated_account_locked', 'mmgwc_initiated_invalid_credentials', 'mmgwc_initiated_rejected' ), true ) ) {
 					$request_started = false;
 					self::mark_initiation_not_sent( $order, $reason );
-					return new WP_Error( 'mmgwc_initiated_not_sent', 'MMG did not accept the approval request, so no request was sent to the app. Try again or choose MMG hosted checkout.' );
+					$message = in_array( $reason, array( 'mmgwc_initiated_account_locked', 'mmgwc_initiated_invalid_credentials' ), true )
+						? $response->get_error_message()
+						: 'MMG did not accept the approval request, so no request was sent to the app. Try again or choose MMG hosted checkout.';
+					return new WP_Error( 'mmgwc_initiated_not_sent', $message );
 				}
 				self::mark_initiation_uncertain( $order, $correlation_id, $response->get_error_code() );
 				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG did not return a final result. Do not try again while the store reviews the payment record.' );

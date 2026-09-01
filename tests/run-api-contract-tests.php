@@ -138,6 +138,30 @@ api_check(
 	'A non-standard API port is rejected.'
 );
 
+$login_config = initiated_api_config();
+unset( $login_config['wss_token'] );
+api_reset_remote(
+	array(
+		api_response( 200, array( 'statusCode' => '315', 'message' => 'USER_ACCOUNT_LOCKED' ) ),
+	)
+);
+$locked = invoke_initiated_api( $login_config );
+api_check( is_wp_error( $locked ) && $locked->get_error_code() === 'mmgwc_initiated_account_locked', 'A provider account lock is reported before any payment request is sent.' );
+api_check( count( $GLOBALS['mmgwc_api_requests'] ) === 1, 'A locked account performs only the token request.' );
+
+api_reset_remote(
+	array(
+		api_response( 422, array( 'statusCode' => '102', 'message' => 'INVALID_CREDENTIALS' ) ),
+	)
+);
+$invalid_login = invoke_initiated_api( $login_config );
+api_check( is_wp_error( $invalid_login ) && $invalid_login->get_error_code() === 'mmgwc_initiated_invalid_credentials', 'Invalid API credentials are distinguished from a locked account.' );
+api_check( count( $GLOBALS['mmgwc_api_requests'] ) === 1, 'Rejected credentials do not dispatch a payment request.' );
+
+api_reset_remote( array( api_response( 404 ) ) );
+$missing_login_route = invoke_initiated_api( $login_config );
+api_check( is_wp_error( $missing_login_route ) && $missing_login_route->get_error_code() === 'mmgwc_initiated_authentication_failed', 'An unexplained login 404 is not misreported as invalid credentials.' );
+
 $pending = array(
 	'status' => 'pending',
 	'objectReference' => '20373216452995',
