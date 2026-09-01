@@ -8,9 +8,9 @@ The plugin adds MMG as a payment method on classic and Block checkout, handles e
 
 - MMG payment method on classic checkout and WooCommerce Blocks checkout
 - Compact hosted-checkout guidance with responsive image previews
-- Optional MMG app approval requests, disabled until MMG authorises the merchant for this use
+- Optional MMG app approval requests using the documented Merchant Initiated API
 - Sandbox (UAT) and Live mode with one-click switching
-- Credential importer that reads the standard MMG ZIP package (or `setup.cfg` plus `.pem` keys)
+- Credential importer that reads hosted checkout packages and optional Merchant Initiated Postman environments
 - Resilient callback handling with three URL shapes accepted, idempotent processing and clear order notes
 - Currency conversion to GYD for non-GYD stores with rounding to the nearest 100
 - Verify Payment and Resend Payment Link tools on the order screen
@@ -47,14 +47,14 @@ The plugin adds MMG as a payment method on classic and Block checkout, handles e
 2. In WordPress admin go to **Plugins → Add New → Upload Plugin** and upload the ZIP.
 3. Activate the plugin.
 4. Go to **MMG Checkout → Importer** and upload your MMG credential package (Sandbox first).
-5. Test end-to-end and send the test recording to MMG Merchant Services.
-6. When MMG approves you for production, import the Live package and switch the mode.
+5. Test the complete Sandbox checkout and callback flow.
+6. Import the Live credential package and switch the mode when the store is ready.
 
 ## Configuration
 
 Most settings live under **WP Admin → MMG Checkout → Settings**. Sensitive values (private keys, secret keys, optional API credentials) are encrypted at rest. You can also override any setting from `wp-config.php` using a constant. The Diagnostics page lists every supported constant with example syntax.
 
-The callback URL is shown on the Diagnostics page. Send that URL to MMG when you request your credential package. You do not configure the callback yourself.
+The callback URL is shown on the Diagnostics page. MMG's [Merchant Checkout documentation](https://mmg.gy/developer/Merchant%20Checkout.html) calls this the Response URL. Copy the Diagnostics value into the merchant configuration used for the active environment.
 
 ## Usage
 
@@ -66,11 +66,11 @@ For invoice-style billing use **MMG Checkout → Payment Requests** to create a 
 
 Version 2.16.0 corrected the GitHub update channel and requires a matching `.zip.sha256` sidecar before WordPress can install the ZIP. Versions 2.13.1 through 2.14.21 use the legacy manifest to receive the one-time 2.16.0 bridge, then use this repository for later releases. Update metadata is checked during normal WordPress update checks and successful responses are cached for six hours. A version-bumped push to `main` creates the matching release and installable assets after PHP 7.4 to 8.3 validation. Later pushes at the same version do not publish another update.
 
-From version 2.15.0, MMG Checkout requires Transaction Verification API credentials for authenticated Transaction Lookup. Version 2.16.0 stores separate Sandbox and Live API values. Version 2.16.1 labels these shared verification fields separately from approval-only settings and keeps protected values out of settings HTML. The payment method stays unavailable until the active mode is complete. A browser callback is treated as correlation data and an order is marked paid only after MMG confirms the transaction ID, amount, GYD currency, merchant and completed status.
+Version 2.16.2 follows MMG's two published flows. Standard hosted checkout requires only the Checkout URL, Merchant ID, Client ID, Merchant Name, Secret Key and PEM keys documented for [Merchant Checkout](https://mmg.gy/developer/Merchant%20Checkout.html). Its encrypted Checkout Response can complete the matching WooCommerce order. The separate [Merchant Initiated API](https://mmg.gy/developer/Merchant%20Initiated.html) credentials are optional for hosted checkout and are used for approval requests plus an additional Transaction Lookup when configured. The importer can read these optional values from a Postman environment inside the MMG ZIP or from a separate JSON file for Sandbox or Live.
 
-The optional **Approve in the MMG app** method sends a payment request to the customer's registered phone number. It is disabled by default because MMG's public documentation describes the API primarily for in-store POS use. Enable it only after MMG confirms remote WooCommerce use, the Live API base URL, the merchant credit account ID and polling limits. Public documentation examples are not merchant credentials.
+The optional **Approve in the MMG app** method sends a payment request to the customer's registered phone number. Configure `x-api-key`, `x-wss-mid`, API password, `x-wss-msecret`, `x-wss-mkey` and the API base URL for the active mode. The merchant `creditParty.accountid` uses `x-wss-mid` unless a separate account is entered. The UAT base URL is provided as the Sandbox default. Public documentation examples are not credentials for every merchant.
 
-Credential-bearing API requests are restricted to MMG-controlled domains by default. If MMG supplies a different production domain in writing, add only that domain through the `mmgwc_allowed_api_hosts` filter.
+Credential-bearing API requests are restricted to MMG-controlled domains by default. A store using another configured production domain can add only that domain through the `mmgwc_allowed_api_hosts` filter.
 
 If you need to point the updater somewhere else, the GitHub repository can be filtered:
 

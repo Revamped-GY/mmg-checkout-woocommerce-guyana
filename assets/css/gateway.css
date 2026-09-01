@@ -113,21 +113,19 @@
 
 .mmgwc-guide-image img {
 	display: block;
-	width: 200%;
-	max-width: none;
-	height: 92px;
+	width: 100%;
+	max-width: 100%;
+	height: 112px;
 	object-fit: cover;
+	object-position: center;
 	border: 0;
 	border-radius: 0;
 }
 
-.mmgwc-guide-image-tabs img {
-	object-position: left center;
-}
-
-.mmgwc-guide-image-login img {
-	object-position: right center;
-	margin-left: -100%;
+.mmgwc-guide-image-fields img {
+	width: 145%;
+	max-width: none;
+	margin-left: -45%;
 }
 
 .mmgwc-guide-image span {
@@ -247,7 +245,7 @@
 	}
 
 	.mmgwc-guide-image img {
-		height: 84px;
+		height: 112px;
 	}
 
 	.mmgwc-lightbox {

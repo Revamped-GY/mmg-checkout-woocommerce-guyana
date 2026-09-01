@@ -91,7 +91,8 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 	 * Build shared Classic Checkout and Checkout Blocks content.
 	 */
 	public static function get_checkout_content_html( string $description, bool $show_guide ): string {
-		$image_url = MMGWC_PLUGIN_URL . 'assets/images/mmg-hosted-checkout-guide.png';
+		$options_image_url = MMGWC_PLUGIN_URL . 'assets/images/mmg-hosted-login-options.png';
+		$fields_image_url = MMGWC_PLUGIN_URL . 'assets/images/mmg-hosted-login-fields.png';
 		ob_start();
 		if ( trim( $description ) !== '' ) {
 			echo '<div class="mmgwc-gateway-description">' . wpautop( wp_kses_post( $description ) ) . '</div>';
@@ -104,16 +105,17 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				<ol>
 					<li>Choose <strong>Login</strong>.</li>
 					<li>Enter your MMG phone number and password, then select <strong>Continue</strong>.</li>
-					<li>Use <strong>Pay with QR</strong> only when you can scan the code with the MMG app on another device.</li>
+					<li>MMG will then show an OTP form. Enter the code sent to that phone number to approve the payment.</li>
 				</ol>
+				<p>Use <strong>Pay with QR</strong> only when you can scan the code with the MMG app on another device.</p>
 				<div class="mmgwc-guide-images" aria-label="MMG checkout examples">
-					<a class="mmgwc-guide-image mmgwc-guide-image-tabs" href="<?php echo esc_url( $image_url ); ?>" data-mmgwc-lightbox aria-label="Open a larger preview showing the Login and Pay with QR choices">
-						<img src="<?php echo esc_url( $image_url ); ?>" alt="MMG checkout with Login and Pay with QR choices" loading="lazy" decoding="async" width="1142" height="508">
+					<a class="mmgwc-guide-image" href="<?php echo esc_url( $options_image_url ); ?>" data-mmgwc-lightbox aria-label="Open a larger preview showing the Login and Pay with QR choices">
+						<img src="<?php echo esc_url( $options_image_url ); ?>" alt="MMG checkout with Login and Pay with QR choices" loading="lazy" decoding="async" width="1195" height="636">
 						<span>1. Choose Login</span>
 					</a>
-					<a class="mmgwc-guide-image mmgwc-guide-image-login" href="<?php echo esc_url( $image_url ); ?>" data-mmgwc-lightbox aria-label="Open a larger preview showing the MMG username and password fields">
-						<img src="<?php echo esc_url( $image_url ); ?>" alt="MMG Login form with Username and Password fields" loading="lazy" decoding="async" width="1142" height="508">
-						<span>2. Enter phone number</span>
+					<a class="mmgwc-guide-image mmgwc-guide-image-fields" href="<?php echo esc_url( $fields_image_url ); ?>" data-mmgwc-lightbox aria-label="Open a larger preview showing the MMG username and password fields">
+						<img src="<?php echo esc_url( $fields_image_url ); ?>" alt="MMG Login form with the username and password entered" loading="lazy" decoding="async" width="1223" height="634">
+						<span>2. Enter phone number and password</span>
 					</a>
 				</div>
 				<p class="mmgwc-guide-retry">If the MMG page stops after switching between Login and QR, return to checkout and start again. The plugin will create a fresh MMG session.</p>
@@ -184,16 +186,15 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 	}
 
 	/**
-	 * Do not offer MMG at checkout unless settlement can be verified through
-	 * MMG's authenticated Transaction Lookup API.
+	 * The standard hosted method requires only the credentials documented for
+	 * Merchant Checkout. Merchant Initiated API fields are optional here.
 	 */
 	public function is_available() {
 		if ( ! parent::is_available() ) {
 			return false;
 		}
 		$config = $this->get_active_config();
-		return empty( MMGWC_Payment_Verifier::missing_api_fields( $config ) )
-			&& empty( MMGWC_Payment_Context::missing_hosted_fields( $config ) )
+		return empty( MMGWC_Payment_Context::missing_hosted_fields( $config ) )
 			&& MMGWC_Payment_Context::can_process_currency( MMGWC_Payment_Context::current_checkout_currency() );
 	}
 
@@ -388,14 +389,9 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 			),
 
 			'sandbox_api_section' => array(
-				'title' => 'Sandbox Transaction Verification API',
+				'title' => 'Optional Sandbox Merchant Initiated API',
 				'type' => 'title',
-				'description' => 'Required for the standard hosted checkout to verify completed payments. The optional approval request method reuses these merchant-specific MMG values. Public developer examples are not credentials.',
-			),
-			'sandbox_api_mwallet_base_url' => array(
-				'title' => 'MWallet Base URL',
-				'type' => 'text',
-				'default' => MMGWC_Settings::DEFAULT_SANDBOX_API_BASE,
+				'description' => 'Used for approval requests and optional Transaction Lookup. These fields do not control the standard hosted checkout. Use your merchant values with the UAT endpoint documented by MMG. Values shown as examples on the developer page are not credentials for every merchant.',
 			),
 			'sandbox_api_key' => array(
 				'title' => 'x-api-key',
@@ -405,34 +401,34 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				'title' => 'x-wss-mid (Merchant MSISDN)',
 				'type' => 'text',
 			),
-			'sandbox_api_wss_mkey' => array(
-				'title' => 'x-wss-mkey',
+			'sandbox_api_password' => array(
+				'title' => 'PASSWORD (API login)',
 				'type' => 'password',
+				'description' => 'Used to obtain the short-lived API access token for approval requests.',
 			),
 			'sandbox_api_wss_msecret' => array(
 				'title' => 'x-wss-msecret',
 				'type' => 'password',
 			),
-			'sandbox_api_password' => array(
-				'title' => 'API Password',
+			'sandbox_api_wss_mkey' => array(
+				'title' => 'x-wss-mkey',
 				'type' => 'password',
-				'description' => 'Used to obtain a short-lived resource token.',
+			),
+			'sandbox_api_mwallet_base_url' => array(
+				'title' => 'BASE_URL_MWALLET',
+				'type' => 'text',
+				'default' => MMGWC_Settings::DEFAULT_SANDBOX_API_BASE,
 			),
 			'sandbox_api_credit_account_id' => array(
-				'title' => 'Approval requests: Merchant Credit Account ID',
+				'title' => 'creditParty.accountid override',
 				'type' => 'text',
-				'description' => 'Required only for approval requests. Ask MMG whether this equals x-wss-mid or a separate account ID.',
+				'description' => 'Optional. Leave blank to use <code>x-wss-mid</code>, which is the value used by MMG\'s supplied collection.',
 			),
 
 			'live_api_section' => array(
-				'title' => 'Live Transaction Verification API',
+				'title' => 'Optional Live Merchant Initiated API',
 				'type' => 'title',
-				'description' => 'Required for the standard hosted checkout to verify completed payments. The optional approval request method reuses these merchant-specific MMG values. MMG does not publish the production base URL.',
-			),
-			'live_api_mwallet_base_url' => array(
-				'title' => 'Live MWallet Base URL',
-				'type' => 'text',
-				'default' => '',
+				'description' => 'Used for approval requests and optional Transaction Lookup. These fields do not control the standard hosted checkout. Enter the Live API values configured for this merchant. The public developer page currently lists the UAT endpoint only.',
 			),
 			'live_api_key' => array(
 				'title' => 'Live x-api-key',
@@ -442,41 +438,39 @@ class WC_Gateway_MMGWC extends WC_Payment_Gateway {
 				'title' => 'Live x-wss-mid (Merchant MSISDN)',
 				'type' => 'text',
 			),
-			'live_api_wss_mkey' => array(
-				'title' => 'Live x-wss-mkey',
+			'live_api_password' => array(
+				'title' => 'Live PASSWORD (API login)',
 				'type' => 'password',
 			),
 			'live_api_wss_msecret' => array(
 				'title' => 'Live x-wss-msecret',
 				'type' => 'password',
 			),
-			'live_api_password' => array(
-				'title' => 'Live API Password',
+			'live_api_wss_mkey' => array(
+				'title' => 'Live x-wss-mkey',
 				'type' => 'password',
 			),
-			'live_api_credit_account_id' => array(
-				'title' => 'Approval requests: Live Merchant Credit Account ID',
+			'live_api_mwallet_base_url' => array(
+				'title' => 'Live BASE_URL_MWALLET',
 				'type' => 'text',
-				'description' => 'Use the exact creditParty account ID confirmed by MMG for Live approval requests.',
+				'default' => '',
+			),
+			'live_api_credit_account_id' => array(
+				'title' => 'Live creditParty.accountid override',
+				'type' => 'text',
+				'description' => 'Optional. Leave blank to use <code>x-wss-mid</code>, which is the value used by MMG\'s supplied collection.',
 			),
 
 			'initiated_section' => array(
 				'title' => 'Optional: approve in the MMG app',
 				'type' => 'title',
-				'description' => 'Creates a separate checkout method that sends an MMG approval request to the customer. Keep this disabled until MMG confirms remote WooCommerce use, the production endpoint, the merchant credit account and polling limits.',
+				'description' => 'Creates a separate checkout method with MMG\'s documented Merchant Initiated API. Complete the shared API fields and merchant credit account ID for the active mode before enabling it.',
 			),
 			'initiated_enabled' => array(
 				'title' => 'Enable approval requests',
 				'label' => 'Offer Approve in the MMG app at checkout',
 				'type' => 'checkbox',
 				'default' => 'no',
-			),
-			'initiated_authorised' => array(
-				'title' => 'MMG authorisation',
-				'label' => 'MMG has confirmed this merchant may use approval requests for remote WooCommerce orders',
-				'type' => 'checkbox',
-				'default' => 'no',
-				'description' => 'The public API page describes this service primarily for in-store POS use. Keep this clear unless MMG has approved the intended use.',
 			),
 			'initiated_title' => array(
 				'title' => 'Approval method title',
@@ -697,7 +691,7 @@ private function maybe_migrate_checkout_urls(): void {
 
 	private static function hosted_config_fingerprint( array $config ): string {
 		$values = array();
-		foreach ( array( 'mode', 'checkout_url', 'merchant_id', 'client_id', 'merchant_name', 'secret_key', 'public_key', 'private_key', 'mwallet_base_url', 'api_key', 'wss_mid', 'wss_mkey', 'wss_msecret', 'password' ) as $key ) {
+		foreach ( array( 'mode', 'checkout_url', 'merchant_id', 'client_id', 'merchant_name', 'secret_key', 'public_key', 'private_key' ) as $key ) {
 			$values[ $key ] = isset( $config[ $key ] ) && is_scalar( $config[ $key ] ) ? (string) $config[ $key ] : '';
 		}
 		$encoded = wp_json_encode( $values, JSON_UNESCAPED_SLASHES );
@@ -746,10 +740,6 @@ private function maybe_migrate_checkout_urls(): void {
 	private function build_mmg_redirect_url_locked( WC_Order $order, bool $force_new = false ): string {
 		$config = $this->get_active_config();
 
-		$missing_api_fields = MMGWC_Payment_Verifier::missing_api_fields( $config );
-		if ( ! empty( $missing_api_fields ) ) {
-			throw new RuntimeException( 'Missing MMG verification setting: ' . $missing_api_fields[0] );
-		}
 		$missing_hosted_fields = MMGWC_Payment_Context::missing_hosted_fields( $config );
 		if ( ! empty( $missing_hosted_fields ) ) {
 			throw new RuntimeException( 'Missing MMG setting: ' . $missing_hosted_fields[0] );
@@ -1153,18 +1143,18 @@ private function maybe_migrate_checkout_urls(): void {
 				return true;
 			}
 			if ( $order->is_paid() || in_array( (string) $order->get_status(), array( 'refunded', 'trash' ), true ) ) {
-				$order->add_order_note( 'A durable MMG callback could not finish processing after the order was already paid or closed. Review the callback with MMG for a possible additional payment.' );
+				$order->add_order_note( 'A durable MMG callback could not finish processing after the order was already paid or closed. Review the merchant records for a possible additional payment.' );
 				return true;
 			}
 			if ( $order->get_payment_method() !== 'mmg_checkout' ) {
 				$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'review:payment_method_changed' );
 				$order->save();
-				$order->add_order_note( 'A durable MMG payment callback was received after the order payment method changed. Manual verification with MMG is required.' );
+				$order->add_order_note( 'A durable MMG payment callback was received after the order payment method changed. Review the transaction in the merchant records.' );
 				return true;
 			}
 			$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'review:callback_processing_failed' );
 			$order->save();
-			$order->add_order_note( 'The durable MMG payment callback could not be processed after bounded retries. Manual verification with MMG is required. Do not ask the customer to pay again.' );
+			$order->add_order_note( 'The durable MMG payment callback could not be processed after bounded retries. Review the merchant records. Do not ask the customer to pay again.' );
 			return true;
 		} catch ( Throwable $exception ) {
 			return false;
@@ -1477,7 +1467,11 @@ private function maybe_migrate_checkout_urls(): void {
 				$verification_snapshot = $session;
 				$verification_snapshot['payment_method'] = 'mmg_checkout';
 				$lookup_id_valid = preg_match( '/^\d{1,64}$/', $txn_id ) === 1;
-				$lookup_data = $lookup_id_valid ? MMGWC_API::transaction_lookup( $config, $txn_id ) : null;
+				$lookup_configured = empty( MMGWC_Payment_Verifier::missing_lookup_fields( $config ) );
+				$lookup_data = $lookup_id_valid && $lookup_configured
+					? MMGWC_API::transaction_lookup( $config, $txn_id )
+					: null;
+				$lookup_decisive = is_array( $lookup_data ) && MMGWC_Payment_Verifier::hosted_lookup_is_decisive( $lookup_data );
 				if ( ! MMGWC_Payment_Verifier::renew_order_lock( $order_id ) ) {
 					$queued = $from_queue || $this->queue_hosted_callback( $order_id, $response );
 					$processing_state = array( 'retry' => $queued, 'reason' => 'order_lock_lost' );
@@ -1496,48 +1490,17 @@ private function maybe_migrate_checkout_urls(): void {
 				$order->update_meta_data( MMGWC_META_LAST_VERIFIED_AT, (string) time() );
 				if ( is_array( $lookup_data ) ) {
 					$order->update_meta_data( '_mmg_lookup_last', wp_json_encode( MMGWC_Payment_Verifier::lookup_record( $lookup_data ) ) );
+					if ( ! $lookup_decisive ) {
+						MMGWC_Logger::warning( 'MMG Transaction Lookup did not report a final state; using the encrypted Checkout Response', array( 'order_id' => $order_id ) );
+					}
+				} elseif ( $lookup_configured ) {
+					MMGWC_Logger::warning( 'MMG Transaction Lookup was unavailable; using the encrypted Checkout Response', array( 'order_id' => $order_id ) );
 				}
 				$order->save();
 
-				if ( ! is_array( $lookup_data ) && ( $order->is_paid() || in_array( (string) $order->get_status(), array( 'refunded', 'trash' ), true ) ) ) {
-					$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'review:lookup_failed_after_order_closed' );
-					$order->save();
-					$order->add_order_note( 'MMG returned a success callback after the order was already paid or closed, but authenticated lookup was unavailable. Review the possible duplicate payment with MMG.' );
-					$this->add_customer_notice( 'This order is already paid or closed. The store is checking an additional MMG response. Please do not pay again.', 'notice' );
-					return $this->get_return_url( $order );
-				}
-
-				if ( $lookup_id_valid && ! is_array( $lookup_data ) ) {
-					$retry_allowed = ! $from_queue || ! empty( $processing_context['lookup_retry_allowed'] );
-					if ( $from_queue && ! $retry_allowed ) {
-						$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'review:lookup_retry_exhausted' );
-						$order->save();
-						$order->add_order_note( 'MMG reported payment success, but authenticated lookup remained unavailable after bounded retries. Manual verification with MMG is required. Do not ask the customer to pay again.' );
-						MMGWC_Logger::error( 'MMG payment lookup retry limit reached', array( 'order_id' => $order_id, 'attempts' => (int) ( $processing_context['lookup_attempt'] ?? 0 ) ) );
-						$this->add_customer_notice( 'Your MMG payment needs store verification. Please do not pay again.', 'notice' );
-						return $this->get_return_url( $order );
-					}
-
-					$queued = $from_queue || $this->queue_hosted_callback( $order_id, $response );
-					if ( $queued ) {
-						$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'pending:lookup_retry' );
-						$order->save();
-						if ( ! $from_queue ) {
-							$order->add_order_note( 'MMG reported payment success, but authenticated lookup was temporarily unavailable. Verification was queued for retry.' );
-						}
-						$processing_state = array( 'retry' => true, 'reason' => 'lookup_failed' );
-					} else {
-						$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'review:lookup_retry_queue_failed' );
-						$order->save();
-						$order->add_order_note( 'MMG reported payment success, but authenticated lookup was unavailable and the retry could not be stored. Manual verification with MMG is required.' );
-					}
-					$this->add_customer_notice( 'Your MMG payment is being verified. Please do not pay again.', 'notice' );
-					return $this->get_return_url( $order );
-				}
-
-				$verification = is_array( $lookup_data )
+				$verification = $lookup_decisive
 					? MMGWC_Payment_Verifier::verify_callback( $order, $response, $lookup_data, $config, $verification_snapshot )
-					: array( 'valid' => false, 'code' => 'invalid_transaction_id' );
+					: MMGWC_Payment_Verifier::verify_hosted_callback( $order, $response, $config, $verification_snapshot );
 				if ( ! empty( $verification['valid'] ) || ! empty( $verification['settlement_verified'] ) ) {
 					if ( ! MMGWC_Payment_Verifier::renew_order_lock( $order_id ) ) {
 						$queued = $from_queue || $this->queue_hosted_callback( $order_id, $response );
@@ -1552,7 +1515,9 @@ private function maybe_migrate_checkout_urls(): void {
 					}
 					$order = $pre_completion_order;
 					$payment_method_changed = $order->get_payment_method() !== 'mmg_checkout';
-					$verification = MMGWC_Payment_Verifier::verify_callback( $order, $response, $lookup_data, $config, $verification_snapshot );
+					$verification = $lookup_decisive
+						? MMGWC_Payment_Verifier::verify_callback( $order, $response, $lookup_data, $config, $verification_snapshot )
+						: MMGWC_Payment_Verifier::verify_hosted_callback( $order, $response, $config, $verification_snapshot );
 				}
 				if ( $payment_method_changed && ( ! empty( $verification['valid'] ) || ! empty( $verification['settlement_verified'] ) ) ) {
 					return $this->record_hosted_settlement_after_method_change( $order, $verification, $txn_id );
@@ -1562,15 +1527,18 @@ private function maybe_migrate_checkout_urls(): void {
 					$order->update_meta_data( MMGWC_META_REVIEW_TXN_ID, $review_transaction_id );
 					$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified:order_already_paid_review' );
 					$order->save();
-					$order->add_order_note( 'MMG reported an additional settled checkout transaction after the order was already paid or closed. Transaction ID: ' . $review_transaction_id . '. Review the possible duplicate payment with MMG.' );
+					$order->add_order_note( 'MMG reported an additional settled checkout transaction after the order was already paid or closed. Transaction ID: ' . $review_transaction_id . '. Review the merchant records for a possible duplicate payment.' );
 					$this->add_customer_notice( 'This order was already paid or closed and MMG reported another payment. The store will review it. Please do not pay again.', 'notice' );
 					return $this->get_return_url( $order );
 				}
 				if ( ! empty( $verification['valid'] ) ) {
 					$verified_txn_id = (string) $verification['transaction_id'];
+					$verification_source = isset( $verification['source'] ) && $verification['source'] === 'hosted_callback'
+						? 'hosted_callback'
+						: 'transaction_lookup';
 					$order->update_meta_data( MMGWC_META_TXN_ID, $verified_txn_id );
 					$order->update_meta_data( MMGWC_META_PROCESSED_TXN_ID, $verified_txn_id );
-					$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified' );
+					$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified:' . $verification_source );
 					$order->save();
 					if ( ! $order->is_paid() ) {
 						if ( ! MMGWC_Payment_Verifier::renew_order_lock( $order_id ) ) {
@@ -1585,7 +1553,9 @@ private function maybe_migrate_checkout_urls(): void {
 							return $this->get_return_url( $order );
 						}
 						$completion_method_changed = $completion_order->get_payment_method() !== 'mmg_checkout';
-						$completion_verification = MMGWC_Payment_Verifier::verify_callback( $completion_order, $response, $lookup_data, $config, $verification_snapshot );
+						$completion_verification = $lookup_decisive
+							? MMGWC_Payment_Verifier::verify_callback( $completion_order, $response, $lookup_data, $config, $verification_snapshot )
+							: MMGWC_Payment_Verifier::verify_hosted_callback( $completion_order, $response, $config, $verification_snapshot );
 						if ( $completion_method_changed && ( ! empty( $completion_verification['valid'] ) || ! empty( $completion_verification['settlement_verified'] ) ) ) {
 							return $this->record_hosted_settlement_after_method_change( $completion_order, $completion_verification, $verified_txn_id );
 						}
@@ -1617,7 +1587,11 @@ private function maybe_migrate_checkout_urls(): void {
 					if ( $order->is_paid() ) {
 						$this->clear_checkout_session_meta( $order, true );
 						if ( empty( $verification['idempotent'] ) ) {
-							$order->add_order_note( sprintf( 'MMG payment authenticated and verified. Transaction ID: %s', $verified_txn_id ) );
+							$order->add_order_note(
+								$verification_source === 'hosted_callback'
+									? sprintf( 'MMG payment confirmed by the encrypted Checkout Response. Transaction ID: %s', $verified_txn_id )
+									: sprintf( 'MMG payment confirmed by authenticated Transaction Lookup. Transaction ID: %s', $verified_txn_id )
+							);
 						}
 						return $this->get_return_url( $order );
 					}
@@ -1632,7 +1606,7 @@ private function maybe_migrate_checkout_urls(): void {
 				$failure_code = isset( $verification['code'] ) ? sanitize_key( (string) $verification['code'] ) : 'verification_failed';
 				$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'failed:' . $failure_code );
 				$order->save();
-				$order->add_order_note( 'MMG callback reported success but authenticated verification failed: ' . $failure_code . '. The order was not marked as paid.' );
+				$order->add_order_note( 'MMG callback reported success but payment verification failed: ' . $failure_code . '. The order was not marked as paid.' );
 				MMGWC_Logger::error( 'MMG payment verification failed', array( 'order_id' => $order_id, 'reason' => $failure_code ) );
 				$this->add_customer_notice( 'Your MMG payment is awaiting verification. Please do not pay again. The store will review the transaction.', 'notice' );
 				return $this->get_return_url( $order );

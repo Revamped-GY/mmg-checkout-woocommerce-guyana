@@ -31,6 +31,7 @@ final class MMGWC_QR_Payments_Admin {
 		$qty = isset( $_POST['qty'] ) ? max( 1, absint( $_POST['qty'] ) ) : 1;
 
 		$expires_days = isset( $_POST['expires_days'] ) ? max( 1, absint( $_POST['expires_days'] ) ) : 7;
+		$expires_days = min( $expires_days, 30 );
 		$one_time = isset( $_POST['one_time'] ) ? sanitize_text_field( wp_unslash( (string) $_POST['one_time'] ) ) : 'yes';
 
 		$tpl = array(

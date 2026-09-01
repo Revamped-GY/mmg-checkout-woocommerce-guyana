@@ -374,13 +374,24 @@ final class MMGWC_Support_Bundle {
 	}
 
 	private static function redact_text( string $text ): string {
-		// Reuse the logger redaction patterns and add a few extra.
-		$text = preg_replace( '/token=([A-Za-z0-9\-_\.]+)/', 'token=[redacted]', $text );
-		$text = preg_replace( '/mmg-checkout\/[A-Za-z0-9\-_\.]+/', 'mmg-checkout/[redacted]', $text );
-		$text = preg_replace( '/(api_key\s*[:=]\s*)([^\s\"]+)/i', '$1[redacted]', $text );
-		$text = preg_replace( '/(secret_key\s*[:=]\s*)([^\s\"]+)/i', '$1[redacted]', $text );
-		$text = preg_replace( '/(wss_msecret\s*[:=]\s*)([^\s\"]+)/i', '$1[redacted]', $text );
-		return is_string( $text ) ? $text : '';
+		$secret_key = '(?:token|access[-_]?token|refresh[-_]?token|api[-_]?key|x[-_]api[-_]?key|secret[-_]?key|client[-_]?secret|password|api[-_]?password|(?:x[-_])?wss[-_]?(?:token|mkey|msecret)|private[-_]?key|public[-_]?key|authorization)';
+
+		// URLs and path-style callback tokens can appear in older log entries.
+		$text = preg_replace( '/([?&]' . $secret_key . '=)[^&\s]+/i', '$1[redacted]', $text ) ?? $text;
+		$text = preg_replace( '/mmg-checkout\/[A-Za-z0-9\-_\.]+/', 'mmg-checkout/[redacted]', $text ) ?? $text;
+
+		// Header lines, including values with an authentication scheme.
+		$text = preg_replace( '/(Authorization\s*[:=]\s*)(?:(?:Bearer|Basic)\s+)?[^\s,;\"\']+/i', '$1[redacted]', $text ) ?? $text;
+
+		// JSON, PHP-style and plain key/value log formats. Quoted values are
+		// handled first so a secret containing spaces is removed in full.
+		$text = preg_replace( '/([\"\']?' . $secret_key . '[\"\']?\s*[:=]\s*)([\"\'])(.*?)\2/i', '$1$2[redacted]$2', $text ) ?? $text;
+		$text = preg_replace( '/(' . $secret_key . '\s*[:=]\s*)[^\s,;\"\']+/i', '$1[redacted]', $text ) ?? $text;
+
+		// Key material may be logged across several lines.
+		$text = preg_replace( '/-----BEGIN [^-]+-----[\s\S]+?-----END [^-]+-----/', '[redacted-pem]', $text ) ?? $text;
+
+		return $text;
 	}
 
 	private static function build_order_summary( int $order_id ) {

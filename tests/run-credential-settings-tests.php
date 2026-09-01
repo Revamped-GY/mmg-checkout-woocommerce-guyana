@@ -11,6 +11,7 @@ define( 'DAY_IN_SECONDS', 86400 );
 $GLOBALS['mmgwc_test_options'] = array();
 $GLOBALS['mmgwc_test_errors'] = array();
 $GLOBALS['mmgwc_test_checks'] = 0;
+$GLOBALS['mmgwc_test_update_option_should_fail'] = false;
 
 function get_option( string $key, $default = false ) {
 	return array_key_exists( $key, $GLOBALS['mmgwc_test_options'] )
@@ -19,6 +20,9 @@ function get_option( string $key, $default = false ) {
 }
 
 function update_option( string $key, $value, $autoload = null ): bool {
+	if ( ! empty( $GLOBALS['mmgwc_test_update_option_should_fail'] ) ) {
+		return false;
+	}
 	$GLOBALS['mmgwc_test_options'][ $key ] = $value;
 	return true;
 }
@@ -179,6 +183,49 @@ MMGWC_Settings::update_partial( array( 'sandbox_api_key' => $unreadable ) );
 $storage_errors = MMGWC_Secure_Store::operation_errors();
 credential_check( count( $storage_errors ) === 1, 'A rejected protected replacement records one custom-page operation error.' );
 
+$original_checked = array(
+	'mode' => 'live',
+	'live_api_key' => MMGWC_Secure_Store::encrypt( 'old-imported-api-key' ),
+);
+$GLOBALS['mmgwc_test_options'][ MMGWC_SETTINGS_OPTION_KEY ] = $original_checked;
+$checked_saved = MMGWC_Settings::update_partial_checked(
+	array(
+		'live_api_key' => 'new-imported-api-key',
+		'live_api_wss_mid' => '6991234',
+	)
+);
+$checked_values = get_option( MMGWC_SETTINGS_OPTION_KEY, array() );
+credential_check( $checked_saved, 'The checked importer settings path reports a successful secure save.' );
+credential_check( MMGWC_Secure_Store::decrypt( $checked_values['live_api_key'] ) === 'new-imported-api-key', 'The checked importer path encrypts a plaintext API credential.' );
+credential_check( $checked_values['mode'] === 'live', 'The checked importer path preserves unrelated existing settings.' );
+
+$before_failed_write = $checked_values;
+$GLOBALS['mmgwc_test_update_option_should_fail'] = true;
+$failed_write = MMGWC_Settings::update_partial_checked( array( 'live_api_wss_mid' => '6999999' ) );
+$GLOBALS['mmgwc_test_update_option_should_fail'] = false;
+credential_check( ! $failed_write, 'The checked importer path reports a changed-value database write failure.' );
+credential_check( get_option( MMGWC_SETTINGS_OPTION_KEY, array() ) === $before_failed_write, 'A failed importer database write leaves the complete settings option unchanged.' );
+
+$GLOBALS['mmgwc_test_update_option_should_fail'] = true;
+$unchanged_write = MMGWC_Settings::update_partial_checked( array() );
+$GLOBALS['mmgwc_test_update_option_should_fail'] = false;
+credential_check( $unchanged_write, 'An unchanged checked import remains successful when WordPress reports no update.' );
+
+$before_rejected_checked = $checked_values;
+$checked_rejected = MMGWC_Settings::update_partial_checked(
+	array(
+		'live_api_key' => $unreadable,
+		'live_merchant_id' => 'must-not-save-partially',
+	)
+);
+credential_check( ! $checked_rejected, 'The checked importer path reports a rejected protected replacement.' );
+credential_check( get_option( MMGWC_SETTINGS_OPTION_KEY, array() ) === $before_rejected_checked, 'A rejected imported secret leaves the complete settings option unchanged.' );
+credential_check( count( MMGWC_Secure_Store::operation_errors() ) === 1, 'A rejected checked import records one safe storage error.' );
+
+$GLOBALS['mmgwc_test_options'][ MMGWC_SETTINGS_OPTION_KEY ] = array( 'sandbox_api_wss_mid' => '6991234' );
+$sandbox_config = MMGWC_Settings::get_config( 'sandbox' );
+credential_check( $sandbox_config['credit_account_id'] === '6991234', 'Merchant Initiated creditParty.accountid defaults to x-wss-mid.' );
+
 require_once dirname( __DIR__ ) . '/includes/admin/class-mmgwc-menu.php';
 $notice_method = new ReflectionMethod( 'MMGWC_Menu', 'render_settings_save_notices' );
 $notice_method->setAccessible( true );
@@ -189,8 +236,16 @@ credential_check( strpos( $notice_html, 'notice-error' ) !== false, 'The custom 
 credential_check( strpos( $notice_html, 'Settings saved.' ) === false, 'The custom settings page suppresses its success notice after a protected credential error.' );
 
 $gateway_source = file_get_contents( dirname( __DIR__ ) . '/includes/class-wc-gateway-mmgwc.php' );
-credential_check( is_string( $gateway_source ) && strpos( $gateway_source, 'Live Transaction Verification API' ) !== false, 'Live hosted-checkout verification is labelled separately from approval requests.' );
-credential_check( is_string( $gateway_source ) && strpos( $gateway_source, "'title' => 'Live Merchant Initiated API'" ) === false, 'The misleading Live Merchant Initiated API section title is removed.' );
-credential_check( count( $GLOBALS['mmgwc_test_errors'] ) === 4, 'Each rejected encrypted replacement produces one administrator error.' );
+credential_check( is_string( $gateway_source ) && strpos( $gateway_source, 'Optional Live Merchant Initiated API' ) !== false, 'The shared optional fields use MMG\'s documented Merchant Initiated API name.' );
+credential_check( is_string( $gateway_source ) && strpos( $gateway_source, 'These fields do not control the standard hosted checkout.' ) !== false, 'The settings state that Merchant Initiated API values do not gate hosted checkout.' );
+credential_check( is_string( $gateway_source ) && strpos( $gateway_source, "'initiated_authorised'" ) === false, 'The extra MMG authorisation checkbox is removed.' );
+$sandbox_order = array_map(
+	static function ( string $needle ) use ( $gateway_source ): int {
+		return is_string( $gateway_source ) ? (int) strpos( $gateway_source, "'sandbox_api_{$needle}'" ) : -1;
+	},
+	array( 'key', 'wss_mid', 'password', 'wss_msecret', 'wss_mkey', 'mwallet_base_url' )
+);
+credential_check( $sandbox_order === array_values( $sandbox_order ) && $sandbox_order === array_unique( $sandbox_order ) && $sandbox_order === array_values( array_filter( $sandbox_order, static function ( int $position ): bool { return $position > 0; } ) ) && $sandbox_order === ( function ( array $positions ): array { $sorted = $positions; sort( $sorted ); return $sorted; } )( $sandbox_order ), 'Sandbox API settings follow the supplied Postman environment order.' );
+credential_check( count( $GLOBALS['mmgwc_test_errors'] ) === 5, 'Each rejected encrypted replacement produces one administrator error.' );
 
 echo 'Credential settings assertions passed: ' . $GLOBALS['mmgwc_test_checks'] . PHP_EOL;

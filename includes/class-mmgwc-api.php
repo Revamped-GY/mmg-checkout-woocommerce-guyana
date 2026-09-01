@@ -82,18 +82,21 @@ final class MMGWC_API {
 	}
 
 	/**
-	 * Authenticated transaction lookup. A successful lookup is required before
-	 * an order can be marked as paid.
+	 * Transaction Lookup from MMG's Merchant Initiated API.
+	 *
+	 * The published Lookup operation lists the merchant headers but omits
+	 * x-wss-token. When an API password is configured, the plugin still includes
+	 * the short-lived token described by the API authentication section.
 	 */
 	public static function transaction_lookup( array $config, string $transaction_id ) {
 		$transaction_id = trim( $transaction_id );
-		if ( preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 || ! self::has_request_credentials( $config ) ) {
+		if ( preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 || ! self::has_lookup_credentials( $config ) ) {
 			return null;
 		}
 
 		$url = rtrim( (string) $config['mwallet_base_url'], '/' ) . '/e-merchant-initiated-transactions/lookup';
 		$url = add_query_arg( array( 'transactionId' => $transaction_id ), $url );
-		return self::authenticated_request( 'GET', $url, $config );
+		return self::authenticated_request( 'GET', $url, $config, null, '', false );
 	}
 
 	/**
@@ -128,9 +131,12 @@ final class MMGWC_API {
 			),
 		);
 
-		$data = self::authenticated_request( 'POST', $url, $config, $body, $correlation_id );
+		$data = self::authenticated_request( 'POST', $url, $config, $body, $correlation_id, true, true );
+		if ( is_wp_error( $data ) ) {
+			return $data;
+		}
 		if ( ! is_array( $data ) ) {
-			return new WP_Error( 'mmgwc_initiated_api_failed', 'MMG did not accept the approval request.' );
+			return new WP_Error( 'mmgwc_initiated_response_uncertain', 'MMG returned an unclear response after the approval request was sent.' );
 		}
 		return $data;
 	}
@@ -169,7 +175,7 @@ final class MMGWC_API {
 		return preg_match( '/^\d{7}$/', $digits ) === 1 ? $digits : '';
 	}
 
-	private static function authenticated_request( string $method, string $url, array $config, ?array $body = null, string $correlation_id = '' ) {
+	private static function authenticated_request( string $method, string $url, array $config, ?array $body = null, string $correlation_id = '', bool $token_required = true, bool $return_errors = false ) {
 		if ( preg_match( '/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i', $correlation_id ) !== 1 ) {
 			$correlation_id = wp_generate_uuid4();
 		}
@@ -177,8 +183,10 @@ final class MMGWC_API {
 			$token = isset( $config['wss_token'] ) && is_string( $config['wss_token'] ) && $config['wss_token'] !== '' && $attempt === 0
 				? $config['wss_token']
 				: self::get_resource_token( $config, $attempt > 0 );
-			if ( ! is_string( $token ) || $token === '' ) {
-				return null;
+			if ( ( ! is_string( $token ) || $token === '' ) && $token_required ) {
+				return $return_errors
+					? new WP_Error( 'mmgwc_initiated_authentication_failed', 'MMG did not accept the API sign-in. Check the optional Initiated API details and try again.' )
+					: null;
 			}
 
 			$args = array(
@@ -191,10 +199,12 @@ final class MMGWC_API {
 					'x-wss-mkey' => (string) $config['wss_mkey'],
 					'x-wss-msecret' => (string) $config['wss_msecret'],
 					'x-api-key' => (string) $config['api_key'],
-					'x-wss-token' => $token,
 					'x-wss-correlationid' => $correlation_id,
 				),
 			);
+			if ( is_string( $token ) && $token !== '' ) {
+				$args['headers']['x-wss-token'] = $token;
+			}
 			if ( $body !== null ) {
 				$args['body'] = wp_json_encode( $body );
 			}
@@ -204,32 +214,60 @@ final class MMGWC_API {
 				: wp_safe_remote_get( $url, $args );
 			if ( is_wp_error( $resp ) ) {
 				MMGWC_Logger::warning( 'MMG API request failed: ' . $resp->get_error_message() );
-				return null;
+				return $return_errors
+					? new WP_Error( 'mmgwc_initiated_transport_uncertain', 'The connection ended before MMG returned a result.' )
+					: null;
 			}
 
 			$code = (int) wp_remote_retrieve_response_code( $resp );
 			if ( in_array( $code, array( 401, 403 ), true ) && $attempt === 0 ) {
+				if ( ! isset( $config['password'] ) || trim( (string) $config['password'] ) === '' ) {
+					return $return_errors
+						? new WP_Error( 'mmgwc_initiated_authentication_failed', 'MMG did not accept the API sign-in. Check the optional Initiated API details and try again.' )
+						: null;
+				}
 				delete_transient( self::token_cache_key( $config ) );
 				continue;
 			}
 			$raw = (string) wp_remote_retrieve_body( $resp );
 			if ( $code < 200 || $code >= 300 ) {
 				MMGWC_Logger::warning( 'MMG API request non-2xx: ' . $code );
+				if ( $return_errors ) {
+					return in_array( $code, array( 400, 401, 403, 404, 405, 406, 415, 422 ), true )
+						? new WP_Error( 'mmgwc_initiated_rejected', 'MMG rejected the approval request. Check the optional Initiated API details and try again.' )
+						: new WP_Error( 'mmgwc_initiated_server_uncertain', 'MMG did not return a final result for the approval request.' );
+				}
 				return null;
 			}
 			if ( strlen( $raw ) > self::MAX_RESPONSE_BYTES ) {
 				MMGWC_Logger::warning( 'MMG API response too large, ignoring.' );
-				return null;
+				return $return_errors
+					? new WP_Error( 'mmgwc_initiated_response_uncertain', 'MMG returned an unreadable result after the approval request was sent.' )
+					: null;
 			}
 
 			$data = json_decode( $raw, true );
-			return is_array( $data ) ? $data : null;
+			if ( is_array( $data ) ) {
+				return $data;
+			}
+			return $return_errors
+				? new WP_Error( 'mmgwc_initiated_response_uncertain', 'MMG returned an unreadable result after the approval request was sent.' )
+				: null;
 		}
 		return null;
 	}
 
 	private static function has_request_credentials( array $config ): bool {
 		foreach ( array( 'mwallet_base_url', 'api_key', 'wss_mid', 'wss_mkey', 'wss_msecret', 'password' ) as $key ) {
+			if ( ! isset( $config[ $key ] ) || ! is_scalar( $config[ $key ] ) || trim( (string) $config[ $key ] ) === '' ) {
+				return false;
+			}
+		}
+		return self::is_valid_base_url( (string) $config['mwallet_base_url'], $config );
+	}
+
+	private static function has_lookup_credentials( array $config ): bool {
+		foreach ( array( 'mwallet_base_url', 'api_key', 'wss_mid', 'wss_mkey', 'wss_msecret' ) as $key ) {
 			if ( ! isset( $config[ $key ] ) || ! is_scalar( $config[ $key ] ) || trim( (string) $config[ $key ] ) === '' ) {
 				return false;
 			}
@@ -275,7 +313,7 @@ final class MMGWC_API {
 	/**
 	 * Validate a credential-bearing MMG API base URL.
 	 *
-	 * Stores can add a written-MMG-approved production domain through
+	 * Stores can add another production domain through
 	 * `mmgwc_allowed_api_hosts`. Each entry permits that host and its subdomains.
 	 */
 	public static function is_valid_base_url( string $base, array $config = array() ): bool {

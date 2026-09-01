@@ -24,7 +24,7 @@ final class WC_Gateway_MMGWC_Initiated extends WC_Payment_Gateway {
 	}
 
 	public function is_available() {
-		if ( ! parent::is_available() || MMGWC_Settings::get( 'initiated_authorised', 'no' ) !== 'yes' ) {
+		if ( ! parent::is_available() ) {
 			return false;
 		}
 		$config = MMGWC_Settings::get_config( MMGWC_Settings::get_mode() );

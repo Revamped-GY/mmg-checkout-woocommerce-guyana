@@ -226,7 +226,7 @@ final class MMGWC_Menu {
 
 		echo '<h2>Go Live Checklist</h2>';
 		echo '<ul style="max-width:900px;list-style:disc;padding-left:18px">';
-		echo '<li>After MMG confirms your Sandbox test, request your <strong>Live</strong> credential package from MMG Merchant Services.</li>';
+		echo '<li>When the store is ready for production, import its <strong>Live</strong> Merchant Checkout credential package.</li>';
 		echo '<li>Import the <strong>Live</strong> zip in <strong>Importer</strong> (do not reuse Sandbox keys).</li>';
 		echo '<li>Switch the plugin mode to <strong>Live</strong> in Settings.</li>';
 		echo '<li>If MMG asks for a response or callback URL, copy it from <strong>Diagnostics</strong> and include it in your email request to MMG Merchant Services. They will configure it on their side.</li>';
@@ -496,7 +496,7 @@ final class MMGWC_Menu {
 		echo '<ul style="list-style:disc;padding-left:18px;max-width:900px">';
 		echo '<li><strong>Order stuck on Pending payment:</strong> open the order and use Verify payment, then check logs if needed.</li>';
 		echo '<li><strong>Customer paid but closed the tab:</strong> Verify payment will update the order using MMG transaction lookup.</li>';
-		echo '<li><strong>MMG shows paid but WooCommerce not updated:</strong> confirm MMG Merchant Services has the correct callback URL on file (copy it from Diagnostics and resend if needed).</li>';
+		echo '<li><strong>MMG shows paid but WooCommerce not updated:</strong> confirm the configured Response URL matches the Callback URL shown in Diagnostics.</li>';
 		echo '<li><strong>Changed modes and now decryption fails:</strong> make sure you imported the correct keys for the selected mode.</li>';
 		echo '</ul>';
 

@@ -7,12 +7,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Applies the invariants required before an MMG transaction can pay an order.
  *
- * The encrypted browser callback is correlation data, not sufficient proof of
- * settlement. A successful order update also requires an authenticated MMG
- * transaction lookup that matches the immutable checkout snapshot.
+ * The documented MMG Checkout response can complete a hosted payment only when
+ * its random per-checkout identifier and the immutable checkout snapshot match.
+ * Transaction Lookup adds a credential-gated cross-check when the shared
+ * Merchant Initiated API details are configured and MMG reports a final state.
  */
 final class MMGWC_Payment_Verifier {
 	private const PAID_STATUSES = array( 'successful', 'completed' );
+	private const FAILED_STATUSES = array( 'failed', 'cancelled', 'declined', 'expired', 'rejected', 'reversed' );
 	private const PAYMENT_METHODS = array( 'mmg_checkout', 'mmg_initiated' );
 	private const LOCK_TTL_SECONDS = 600;
 	private static $owned_order_locks = array();
@@ -53,14 +55,37 @@ final class MMGWC_Payment_Verifier {
 	}
 
 	public static function missing_api_fields( array $config ): array {
-		$required = array(
-			'mwallet_base_url',
-			'api_key',
-			'wss_mid',
-			'wss_mkey',
-			'wss_msecret',
-			'password',
+		return self::missing_fields(
+			$config,
+			array(
+				'mwallet_base_url',
+				'api_key',
+				'wss_mid',
+				'wss_mkey',
+				'wss_msecret',
+				'password',
+			)
 		);
+	}
+
+	/**
+	 * Fields documented for Transaction Lookup. Unlike initiated payment
+	 * authentication, the published Lookup operation does not require a password.
+	 */
+	public static function missing_lookup_fields( array $config ): array {
+		return self::missing_fields(
+			$config,
+			array(
+				'mwallet_base_url',
+				'api_key',
+				'wss_mid',
+				'wss_mkey',
+				'wss_msecret',
+			)
+		);
+	}
+
+	private static function missing_fields( array $config, array $required ): array {
 		$missing = array();
 		foreach ( $required as $key ) {
 			if ( ! isset( $config[ $key ] ) || ! is_scalar( $config[ $key ] ) || trim( (string) $config[ $key ] ) === '' ) {
@@ -75,6 +100,110 @@ final class MMGWC_Payment_Verifier {
 		}
 
 		return $missing;
+	}
+
+	/**
+	 * Verify the encrypted response defined by MMG's hosted Checkout document.
+	 * The response does not repeat the amount or currency, so those values remain
+	 * bound to the immutable snapshot created before the customer left the store.
+	 */
+	public static function verify_hosted_callback( WC_Order $order, array $response, array $config, array $snapshot = array() ): array {
+		$live_payment_method = $order->get_payment_method();
+		$verification_payment_method = isset( $snapshot['payment_method'] ) && is_string( $snapshot['payment_method'] )
+			? trim( $snapshot['payment_method'] )
+			: $live_payment_method;
+		$payment_method_changed = $live_payment_method !== $verification_payment_method;
+		if ( $verification_payment_method !== 'mmg_checkout' ) {
+			return self::failure( 'wrong_payment_method', 'The order does not use MMG Checkout.' );
+		}
+
+		$merchant_transaction_id = self::callback_value(
+			$response,
+			array( 'merchantTransactionId', 'MerchantTransactionId', 'merchantTransactionID', 'MerchantTransactionID' )
+		);
+		$stored_merchant_transaction_id = self::snapshot_value( $order, $snapshot, 'merchant_transaction_id', MMGWC_META_MERCHANT_TXN_ID );
+		if ( $merchant_transaction_id === '' || $stored_merchant_transaction_id === '' || ! hash_equals( $stored_merchant_transaction_id, $merchant_transaction_id ) ) {
+			return self::failure( 'merchant_transaction_mismatch', 'The callback does not match the exact checkout transaction created for this order.' );
+		}
+
+		$result_code = self::callback_value( $response, array( 'resultCode', 'ResultCode', 'transactionStatus', 'transactionStatusCode' ) );
+		if ( $result_code !== '0' ) {
+			return self::failure( 'callback_not_successful', 'The callback does not report a successful payment.' );
+		}
+
+		$order_mode = self::snapshot_value( $order, $snapshot, 'mode', MMGWC_META_MODE );
+		$decrypted_mode = self::callback_value( $response, array( '_mmgwc_decrypted_mode' ) );
+		$config_mode = isset( $config['mode'] ) ? trim( (string) $config['mode'] ) : '';
+		if ( ! in_array( $order_mode, array( 'sandbox', 'live' ), true ) || $decrypted_mode !== $order_mode || $config_mode !== $order_mode ) {
+			return self::failure( 'mode_mismatch', 'The callback credential mode does not match the order checkout mode.' );
+		}
+
+		$transaction_id = self::callback_value(
+			$response,
+			array( 'transactionId', 'TransactionId', 'transactionReference', 'transactionReceipt', 'executionId' )
+		);
+		if ( preg_match( '/^\d{1,64}$/', $transaction_id ) !== 1 ) {
+			return self::failure( 'invalid_transaction_id', 'The MMG transaction ID is missing or invalid.' );
+		}
+
+		$expected_amount = self::normalise_amount( self::snapshot_value( $order, $snapshot, 'expected_amount', MMGWC_META_EXPECTED_AMOUNT ) );
+		$expected_currency = strtoupper( self::snapshot_value( $order, $snapshot, 'expected_currency', MMGWC_META_EXPECTED_CURRENCY ) );
+		if ( $expected_amount === null || $expected_currency !== 'GYD' ) {
+			return self::failure( 'invalid_checkout_snapshot', 'The MMG checkout amount or currency snapshot is invalid.' );
+		}
+
+		$expected_merchant = self::snapshot_value( $order, $snapshot, 'expected_merchant_id', MMGWC_META_EXPECTED_MERCHANT_ID );
+		$configured_merchant = trim( (string) ( $config['merchant_id'] ?? '' ) );
+		if ( $expected_merchant === '' || $configured_merchant === '' || ! hash_equals( $expected_merchant, $configured_merchant ) ) {
+			return self::failure( 'merchant_configuration_mismatch', 'The order merchant snapshot does not match the current MMG merchant configuration.' );
+		}
+
+		$expected_order_total = self::normalise_amount( self::snapshot_value( $order, $snapshot, 'expected_order_total', MMGWC_META_EXPECTED_ORDER_TOTAL ) );
+		$current_order_total = self::normalise_amount( (string) $order->get_total() );
+		$expected_order_currency = strtoupper( self::snapshot_value( $order, $snapshot, 'expected_order_currency', MMGWC_META_EXPECTED_ORDER_CURRENCY ) );
+		$current_order_currency = strtoupper( trim( (string) $order->get_currency() ) );
+		if ( $expected_order_total === null || $current_order_total === null || ! hash_equals( $expected_order_total, $current_order_total ) || $expected_order_currency === '' || $current_order_currency !== $expected_order_currency ) {
+			return self::failure( 'order_changed', 'The WooCommerce order total or currency changed after MMG checkout started.' );
+		}
+
+		if ( self::transaction_used_by_another_order( $transaction_id, (int) $order->get_id(), $order_mode ) ) {
+			return self::failure( 'transaction_reused', 'The MMG transaction ID is already attached to another order.' );
+		}
+
+		$transaction_scope = self::transaction_scope( $order_mode, $config );
+		$processed_transaction_id = trim( (string) $order->get_meta( MMGWC_META_PROCESSED_TXN_ID ) );
+		if ( ! $order->needs_payment() ) {
+			$order_status = method_exists( $order, 'get_status' ) ? (string) $order->get_status() : '';
+			$closed_status = in_array( $order_status, array( 'refunded', 'trash', 'cancelled', 'failed' ), true );
+			if ( $closed_status || $payment_method_changed ) {
+				if ( ! self::claim_transaction( $transaction_scope, $transaction_id, (int) $order->get_id() ) ) {
+					return self::failure( 'transaction_reused', 'The MMG transaction ID is already claimed by another order.' );
+				}
+				return self::settlement_review( $transaction_id );
+			}
+			if ( $processed_transaction_id !== '' && hash_equals( $processed_transaction_id, $transaction_id ) && $order->is_paid() ) {
+				if ( ! self::claim_transaction( $transaction_scope, $transaction_id, (int) $order->get_id() ) ) {
+					return self::failure( 'transaction_reused', 'The MMG transaction ID is already claimed by another order.' );
+				}
+				return self::success( $transaction_id, true, 'hosted_callback' );
+			}
+			if ( $order->is_paid() ) {
+				if ( ! self::claim_transaction( $transaction_scope, $transaction_id, (int) $order->get_id() ) ) {
+					return self::failure( 'transaction_reused', 'The MMG transaction ID is already claimed by another order.' );
+				}
+				return self::settlement_review( $transaction_id );
+			}
+			return self::failure( 'unexpected_order_state', 'The order no longer expects this payment.' );
+		}
+
+		if ( $processed_transaction_id !== '' && ! hash_equals( $processed_transaction_id, $transaction_id ) ) {
+			return self::failure( 'different_transaction_processed', 'The order already records a different MMG payment.' );
+		}
+		if ( ! self::claim_transaction( $transaction_scope, $transaction_id, (int) $order->get_id() ) ) {
+			return self::failure( 'transaction_reused', 'The MMG transaction ID is already claimed by another order.' );
+		}
+
+		return self::success( $transaction_id, false, 'hosted_callback' );
 	}
 
 	public static function verify_callback( WC_Order $order, array $response, array $lookup, array $config, array $snapshot = array() ): array {
@@ -129,9 +258,9 @@ final class MMGWC_Payment_Verifier {
 			return self::failure( 'invalid_transaction_id', 'The MMG transaction ID is missing or invalid.' );
 		}
 
-		$missing = self::missing_api_fields( $config );
+		$missing = self::missing_lookup_fields( $config );
 		if ( ! empty( $missing ) ) {
-			return self::failure( 'lookup_not_configured', 'Authenticated MMG transaction verification is not configured.' );
+			return self::failure( 'lookup_not_configured', 'MMG Transaction Lookup is not configured.' );
 		}
 
 		$order_mode = self::snapshot_value( $order, $snapshot, 'mode', MMGWC_META_MODE );
@@ -275,6 +404,16 @@ final class MMGWC_Payment_Verifier {
 		return $record;
 	}
 
+	/**
+	 * A hosted callback uses optional lookup data only when MMG reports a final
+	 * transaction state. Pending and error-shaped responses remain advisory and
+	 * cannot block the documented hosted Checkout Response.
+	 */
+	public static function hosted_lookup_is_decisive( array $lookup ): bool {
+		$status = strtolower( self::lookup_value( $lookup, array( 'transactionStatus', 'transaction_status', 'status' ) ) );
+		return in_array( $status, array_merge( self::PAID_STATUSES, self::FAILED_STATUSES ), true );
+	}
+
 	private static function normalise_amount( string $amount ) {
 		$amount = str_replace( ',', '', trim( $amount ) );
 		if ( preg_match( '/^(\d+)(?:\.(\d+))?$/', $amount, $matches ) !== 1 ) {
@@ -398,18 +537,28 @@ final class MMGWC_Payment_Verifier {
 	}
 
 	private static function transaction_scope( string $mode, array $config ): string {
-		$base_url = strtolower( rtrim( trim( (string) ( $config['mwallet_base_url'] ?? '' ) ), '/' ) );
+		$base_url = trim( (string) ( $config['mwallet_base_url'] ?? '' ) );
+		if ( $base_url === '' ) {
+			$base_url = trim( (string) ( $config['checkout_url'] ?? '' ) );
+		}
+		$base_url = strtolower( rtrim( $base_url, '/' ) );
 		$api_tenant = trim( (string) ( $config['wss_mid'] ?? '' ) );
+		if ( $api_tenant === '' ) {
+			$api_tenant = trim( (string) ( $config['merchant_id'] ?? '' ) );
+		}
 		return hash( 'sha256', $mode . '|' . $base_url . '|' . $api_tenant );
 	}
 
-	private static function success( string $transaction_id, bool $idempotent ): array {
+	private static function success( string $transaction_id, bool $idempotent, string $source = 'transaction_lookup' ): array {
 		return array(
 			'valid' => true,
 			'code' => 'verified',
-			'message' => 'The MMG payment passed authenticated order verification.',
+			'message' => $source === 'hosted_callback'
+				? 'The MMG payment passed encrypted Checkout Response verification.'
+				: 'The MMG payment passed authenticated Transaction Lookup verification.',
 			'transaction_id' => $transaction_id,
 			'idempotent' => $idempotent,
+			'source' => $source,
 		);
 	}
 

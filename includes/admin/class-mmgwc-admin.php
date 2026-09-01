@@ -170,6 +170,9 @@ final class MMGWC_Admin {
 		if ( ! $order ) {
 			wp_send_json_error( array( 'message' => 'Order not found.' ), 404 );
 		}
+		if ( ! current_user_can( 'edit_shop_order', $order_id ) ) {
+			wp_send_json_error( array( 'message' => 'Not allowed.' ), 403 );
+		}
 		if ( ! in_array( $order->get_payment_method(), array( 'mmg_checkout', 'mmg_initiated' ), true ) ) {
 			wp_send_json_error( array( 'message' => 'This order is not using an MMG payment method.' ), 400 );
 		}
@@ -200,8 +203,8 @@ final class MMGWC_Admin {
 		) );
 	}
 
-	private static function missing_initiated_api_fields( array $config ): array {
-		return MMGWC_Payment_Verifier::missing_api_fields( $config );
+	private static function missing_lookup_fields( array $config ): array {
+		return MMGWC_Payment_Verifier::missing_lookup_fields( $config );
 	}
 
 	private static function verify_and_complete_order( int $order_id, string $transaction_id ): array {
@@ -228,12 +231,12 @@ final class MMGWC_Admin {
 			$mode = (string) $order->get_meta( MMGWC_META_MODE );
 			$mode = in_array( $mode, array( 'sandbox', 'live' ), true ) ? $mode : MMGWC_Settings::get_mode();
 			$config = MMGWC_Settings::get_config( $mode );
-			$missing = self::missing_initiated_api_fields( $config );
+			$missing = self::missing_lookup_fields( $config );
 			if ( ! empty( $missing ) ) {
 				return array(
 					'success' => false,
 					'http_status' => 400,
-					'message' => 'Missing Transaction Verification API settings: ' . implode( ', ', $missing ) . '. Go to WP Admin → MMG Checkout → Settings and fill the Transaction Verification API section.',
+					'message' => 'Missing Transaction Lookup settings: ' . implode( ', ', $missing ) . '. Go to WP Admin → MMG Checkout → Settings and complete the optional Merchant Initiated API section.',
 					'summary' => '',
 				);
 			}
@@ -283,11 +286,11 @@ final class MMGWC_Admin {
 					$order->update_meta_data( MMGWC_META_INITIATED_STATUS, 'payment_confirmed_review' );
 				}
 				$order->save();
-				$order->add_order_note( 'MMG reported an additional settled transaction after the order was already paid or closed. Transaction ID: ' . $transaction_id . '. Review the possible duplicate payment with MMG.' );
+				$order->add_order_note( 'MMG reported an additional settled transaction after the order was already paid or closed. Transaction ID: ' . $transaction_id . '. Review the merchant records for a possible duplicate payment.' );
 				return array(
 					'success' => false,
 					'http_status' => 409,
-					'message' => 'MMG verified an additional payment for an order that was already paid or closed. Review the possible duplicate with MMG.',
+					'message' => 'MMG verified an additional payment for an order that was already paid or closed. Review the merchant records for a possible duplicate.',
 					'summary' => $summary,
 				);
 			}
@@ -488,6 +491,9 @@ final class MMGWC_Admin {
 		if ( ! $order ) {
 			wp_die( 'Order not found.' );
 		}
+		if ( ! current_user_can( 'edit_shop_order', $order_id ) ) {
+			wp_die( 'Not allowed.' );
+		}
 		if ( ! in_array( $order->get_payment_method(), array( 'mmg_checkout', 'mmg_initiated' ), true ) ) {
 			wp_die( 'This order is not using an MMG payment method.' );
 		}
@@ -533,6 +539,9 @@ final class MMGWC_Admin {
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) {
 			wp_die( 'Order not found.' );
+		}
+		if ( ! current_user_can( 'edit_shop_order', $order_id ) ) {
+			wp_die( 'Not allowed.' );
 		}
 		if ( $order->get_payment_method() !== 'mmg_checkout' ) {
 			wp_die( 'This order is not using MMG Checkout.' );
@@ -686,17 +695,23 @@ final class MMGWC_Admin {
 		}
 		$mode = MMGWC_Settings::get_mode();
 		$config = MMGWC_Settings::get_config( $mode );
-		$missing = MMGWC_Payment_Verifier::missing_api_fields( $config );
-		if ( $initiated_enabled && MMGWC_Settings::get( 'initiated_authorised', 'no' ) !== 'yes' ) {
-			echo '<div class="notice notice-warning"><p><strong>MMG app approval requests are not shown at checkout.</strong> Confirm written MMG authorisation for remote WooCommerce use in MMG Checkout settings before enabling this method.</p></div>';
+		if ( $hosted_enabled ) {
+			$missing_hosted = MMGWC_Payment_Context::missing_hosted_fields( $config );
+			if ( ! empty( $missing_hosted ) ) {
+				echo '<div class="notice notice-error"><p><strong>MMG hosted checkout is unavailable to customers.</strong> Complete these Merchant Checkout settings for ' . esc_html( ucfirst( $mode ) ) . ': ' . esc_html( implode( ', ', array_unique( $missing_hosted ) ) ) . '.</p></div>';
+			}
 		}
-		if ( $initiated_enabled && trim( (string) ( $config['credit_account_id'] ?? '' ) ) === '' ) {
+		if ( ! $initiated_enabled ) {
+			return;
+		}
+		$missing = MMGWC_Payment_Verifier::missing_api_fields( $config );
+		if ( trim( (string) ( $config['credit_account_id'] ?? '' ) ) === '' ) {
 			$missing[] = 'credit_account_id';
 		}
 		if ( empty( $missing ) ) {
 			return;
 		}
-		echo '<div class="notice notice-error"><p><strong>An enabled MMG payment method is unavailable to customers.</strong> Authenticated Transaction Lookup is required before an order can be marked paid. Complete these MMG settings for ' . esc_html( ucfirst( $mode ) ) . ': ' . esc_html( implode( ', ', array_unique( $missing ) ) ) . '.</p></div>';
+		echo '<div class="notice notice-error"><p><strong>MMG app approval requests are unavailable to customers.</strong> Complete these Merchant Initiated API settings for ' . esc_html( ucfirst( $mode ) ) . ': ' . esc_html( implode( ', ', array_unique( $missing ) ) ) . '.</p></div>';
 	}
 
 	public static function admin_notices(): void {

@@ -142,6 +142,12 @@ final class MMGWC_Subscriptions {
 		if ( ! $is_renewal ) {
 			return $gateways;
 		}
+		if ( ! self::is_active_renewal_order( $order ) ) {
+			if ( function_exists( 'wc_add_notice' ) ) {
+				wc_add_notice( 'This renewal link has expired or was replaced. Please create a new renewal from My Account.', 'error' );
+			}
+			return array();
+		}
 
 		// Only allow MMG on renewal pay pages.
 		foreach ( $gateways as $id => $gw ) {
@@ -480,11 +486,24 @@ private static function compute_missed_cycles( string $due_mysql, string $today_
 		}
 
 		$order = wc_get_order( $order_id );
-		if ( ! $order ) {
+		if ( ! $order || ! self::is_active_renewal_order( $order ) ) {
 			return null;
 		}
 
 		return $order->get_checkout_payment_url();
+	}
+
+	public static function customer_get_renewal_payment_url( int $subscription_id, int $user_id ): ?string {
+		$subscription_id = absint( $subscription_id );
+		$user_id = absint( $user_id );
+		$sub = $subscription_id > 0 ? self::get_subscription( $subscription_id ) : null;
+		if ( ! is_array( $sub ) || ! self::customer_owns_subscription( $sub, $user_id ) ) {
+			return null;
+		}
+		if ( ! in_array( (string) ( $sub['status'] ?? '' ), array( 'active', 'due', 'overdue' ), true ) ) {
+			return null;
+		}
+		return self::get_renewal_payment_url( $subscription_id );
 	}
 
 public static function get_subscriptions( array $args = array() ): array {
@@ -833,18 +852,18 @@ if ( $stop_cycles > 0 && $missed_cycles >= $stop_cycles ) {
 
 	private static function get_or_create_renewal_order( array $sub ): int {
 		$sub_id = absint( $sub['id'] ?? 0 );
-		if ( $sub_id <= 0 ) {
+		if ( $sub_id <= 0 || ! class_exists( 'MMGWC_Atomic_Option' ) ) {
 			return 0;
 		}
 
-		// Per-subscription short-lived lock so parallel cron/admin clicks can't each spawn a new order.
-		$lock_key = 'mmgwc_sub_renew_lock_' . $sub_id;
-		$waited = 0;
-		while ( get_transient( $lock_key ) && $waited < 5 ) {
-			usleep( 200000 ); // 200 ms
-			$waited++;
+		$lock_key = 'mmgwc_sub_renew_lock_' . hash( 'sha256', (string) $sub_id );
+		$owned_lock = MMGWC_Atomic_Option::acquire_lock( $lock_key, 60 );
+		if ( $owned_lock === '' ) {
+			$fresh = self::get_subscription( $sub_id );
+			$settings = self::get_settings();
+			$expiry_days = max( 1, absint( $settings['renewal_link_expiry_days'] ?? 7 ) );
+			return is_array( $fresh ) ? self::reusable_renewal_order_id( $fresh, $expiry_days ) : 0;
 		}
-		set_transient( $lock_key, time(), 30 );
 
 		try {
 			// Re-read fresh to avoid acting on stale data from the caller's local copy.
@@ -853,29 +872,23 @@ if ( $stop_cycles > 0 && $missed_cycles >= $stop_cycles ) {
 				$sub = $fresh;
 			}
 
-			$existing_order_id = absint( $sub['renewal_order_id'] ?? 0 );
-
 			$settings = self::get_settings();
 			$expiry_days = max( 1, absint( $settings['renewal_link_expiry_days'] ?? 7 ) );
-
+			$existing_order_id = self::reusable_renewal_order_id( $sub, $expiry_days );
 			if ( $existing_order_id > 0 ) {
-				$order = wc_get_order( $existing_order_id );
-				if ( $order && ! $order->is_paid() ) {
-					$created_at = isset( $sub['renewal_order_created_at'] ) ? (string) $sub['renewal_order_created_at'] : '';
-					$ok_age = true;
-					if ( $created_at !== '' ) {
-						$age = time() - strtotime( $created_at );
-						if ( $age > ( $expiry_days * DAY_IN_SECONDS ) ) {
-							$ok_age = false;
-						}
-					}
-					if ( $ok_age ) {
-						return $existing_order_id;
-					}
+				return $existing_order_id;
+			}
+
+			$previous_order_id = absint( $sub['renewal_order_id'] ?? 0 );
+			if ( $previous_order_id > 0 ) {
+				$previous = wc_get_order( $previous_order_id );
+				if ( $previous && ! $previous->is_paid() && in_array( (string) $previous->get_status(), array( 'pending', 'failed' ), true ) ) {
+					$previous->update_status( 'cancelled', 'Renewal link replaced after its configured expiry.' );
 				}
 			}
 
-			$order_id = self::create_renewal_order( $sub );
+			$expires_at = time() + ( $expiry_days * DAY_IN_SECONDS );
+			$order_id = self::create_renewal_order( $sub, $expires_at );
 			if ( $order_id > 0 ) {
 				global $wpdb;
 				$wpdb->update( self::table_name(), array(
@@ -887,11 +900,30 @@ if ( $stop_cycles > 0 && $missed_cycles >= $stop_cycles ) {
 
 			return $order_id;
 		} finally {
-			delete_transient( $lock_key );
+			MMGWC_Atomic_Option::release_lock( $lock_key, $owned_lock );
 		}
 	}
 
-	private static function create_renewal_order( array $sub ): int {
+	private static function reusable_renewal_order_id( array $sub, int $expiry_days ): int {
+		$order_id = absint( $sub['renewal_order_id'] ?? 0 );
+		if ( $order_id <= 0 ) {
+			return 0;
+		}
+		$order = wc_get_order( $order_id );
+		if ( ! $order || $order->is_paid() || ! in_array( (string) $order->get_status(), array( 'pending', 'failed' ), true ) ) {
+			return 0;
+		}
+		$created_at = isset( $sub['renewal_order_created_at'] ) ? (string) $sub['renewal_order_created_at'] : '';
+		if ( $created_at !== '' ) {
+			$created_timestamp = strtotime( $created_at );
+			if ( $created_timestamp === false || ( time() - $created_timestamp ) > ( max( 1, $expiry_days ) * DAY_IN_SECONDS ) ) {
+				return 0;
+			}
+		}
+		return $order_id;
+	}
+
+	private static function create_renewal_order( array $sub, int $expires_at ): int {
 		$user_id = absint( $sub['user_id'] ?? 0 );
 		$email   = isset( $sub['email'] ) ? sanitize_email( (string) $sub['email'] ) : '';
 		$product_id = absint( $sub['product_id'] ?? 0 );
@@ -948,9 +980,32 @@ if ( $stop_cycles > 0 && $missed_cycles >= $stop_cycles ) {
 
 		$order->update_meta_data( MMGWC_META_SUBSCRIPTION_RENEWAL, 'yes' );
 		$order->update_meta_data( MMGWC_META_SUBSCRIPTION_ID, absint( $sub['id'] ?? 0 ) );
+		$order->update_meta_data( MMGWC_META_SUBSCRIPTION_RENEWAL_EXPIRES_AT, max( time() + 60, $expires_at ) );
 		$order->save();
 
 		return absint( $order->get_id() );
+	}
+
+	private static function is_active_renewal_order( $order ): bool {
+		if ( ! is_object( $order ) || ! method_exists( $order, 'get_id' ) || ! method_exists( $order, 'get_meta' ) ) {
+			return false;
+		}
+		if ( (string) $order->get_meta( MMGWC_META_SUBSCRIPTION_RENEWAL ) !== 'yes' ) {
+			return false;
+		}
+		$subscription_id = absint( $order->get_meta( MMGWC_META_SUBSCRIPTION_ID ) );
+		$sub = $subscription_id > 0 ? self::get_subscription( $subscription_id ) : null;
+		if ( ! is_array( $sub ) || absint( $sub['renewal_order_id'] ?? 0 ) !== absint( $order->get_id() ) ) {
+			return false;
+		}
+		$expires_at = absint( $order->get_meta( MMGWC_META_SUBSCRIPTION_RENEWAL_EXPIRES_AT ) );
+		return $expires_at <= 0 || time() <= $expires_at;
+	}
+
+	private static function customer_owns_subscription( array $sub, int $user_id ): bool {
+		$user_id = absint( $user_id );
+		$sub_user_id = absint( $sub['user_id'] ?? 0 );
+		return $user_id > 0 && $sub_user_id > 0 && $sub_user_id === $user_id;
 	}
 
 	
@@ -1039,11 +1094,7 @@ public static function customer_set_status( int $subscription_id, int $user_id, 
 	// For guest subscriptions, refuse modifications via this path. The customer portal only
 	// shows My Subscriptions to logged-in users, and email-only matching is too weak as an
 	// authorisation primary key.
-	$sub_user = absint( $sub['user_id'] ?? 0 );
-	if ( $sub_user <= 0 ) {
-		return false;
-	}
-	if ( $sub_user !== $user_id ) {
+	if ( ! self::customer_owns_subscription( $sub, $user_id ) ) {
 		return false;
 	}
 

@@ -5,7 +5,7 @@ Requires at least: 6.0
 Tested up to: 6.9.1
 Tested with: 6.9.1
 Requires PHP: 7.4
-Stable tag: 2.16.1
+Stable tag: 2.16.2
 License: GPLv2 or later
 
 == Description ==
@@ -17,15 +17,15 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 == Features ==
 
 * Live and Sandbox modes that you can switch any time
-* MMG credential Importer (upload the MMG zip, or upload setup.cfg plus public and private keys)
+* MMG credential Importer for hosted checkout packages and optional Merchant Initiated Postman environments
 * Works with WooCommerce Block Checkout
 * Optional short hosted-checkout walkthrough with responsive image previews
-* Optional MMG app approval request method, disabled until MMG authorises it
+* Optional MMG app approval request method using the documented Merchant Initiated API
 * Order notes and stored MMG transaction details for audit and support
 * Strong callback handling with duplicate callback protection (idempotency)
 * Clear status mapping with better customer messages
 * Advanced status mapping options for stores that want different behaviour
-* Verify payment tool on the order screen with required authenticated MMG lookup
+* Verify payment tool on the order screen using optional MMG Transaction Lookup credentials
 * Resend payment link tool for pending orders
 * Payment Requests: create an invoice order, send a secure pay link, track paid and expired
 * Subscriptions: reminder based renewals with subscriber tracking and renewal links
@@ -50,10 +50,10 @@ This plugin is built for Guyanese stores using MMG, with a focus on reliability,
 2. Choose your Mode: Sandbox or Live
 3. Go to WP Admin → MMG Checkout → Importer
 4. Upload the zip you received from MMG, or upload setup.cfg and key files separately
-5. Enter the Transaction Verification API credentials used for authenticated Transaction Lookup
-6. Go to WP Admin → MMG Checkout → Diagnostics and copy the Callback URL
-7. Send that Callback URL to MMG Merchant Services during your credential request (UAT or Live)
-8. Run a test order and confirm the order status updates and emails are sent
+5. If the package includes a Merchant Initiated Postman environment, import its optional API fields for Sandbox or Live
+6. Go to WP Admin → MMG Checkout → Diagnostics and copy the Callback URL into the Response URL for the active merchant environment
+7. Run a test order and confirm the order status updates and emails are sent
+8. Complete the optional Merchant Initiated API fields only if you want app approval requests or manual Transaction Lookup
 
 == Payment Requests ==
 
@@ -89,16 +89,30 @@ Check the MMG dashboard for the transaction status, then open the order and use 
 Use Verify payment on the order. This can update the order without the customer returning.
 
 = MMG shows paid but WooCommerce did not update =
-Confirm the callback URL in MMG Merchant Services matches the URL shown in Diagnostics. Also confirm you imported the correct keys for the selected mode and completed the authenticated Transaction Lookup settings.
+Confirm the configured MMG Response URL matches the Callback URL shown in Diagnostics. Also confirm you imported the correct Merchant Checkout keys for the selected mode.
 
 = I changed modes and now decryption fails =
 Sandbox keys only work in Sandbox mode. Live keys only work in Live mode. Re import the correct files for the current mode.
 
 == Changelog ==
 
+= 2.16.2 =
+
+* Restored normal hosted checkout when optional Merchant Initiated API fields are empty.
+* Accepted the encrypted MMG Checkout Response using exact session, mode, order and transaction checks.
+* Renamed the shared optional fields to Merchant Initiated API and removed the extra authorisation checkbox.
+* Kept Transaction Lookup as an additional check when its documented fields are configured.
+* Preserved stored merchant settings during the update.
+* Imported optional Sandbox and Live Merchant Initiated Postman environments in MMG's JSON field order.
+* Made definitely rejected approval requests retryable while keeping uncertain requests protected from duplicates.
+* Replaced both hosted walkthrough images and added the OTP step.
+* Prevented repeated public QR requests from creating unbounded or duplicate payable orders.
+* Restricted payment-request links and renewal links to the correct object and customer.
+* Expanded support-bundle redaction for API headers, tokens, passwords and private keys.
+
 = 2.16.1 =
 
-* Renamed the shared API fields to Transaction Verification and separated approval-only settings.
+* Separated shared API fields from approval-only settings.
 * Prevented protected plaintext and encrypted storage values from appearing in settings forms.
 * Preserved stored credentials when replacement fields are left blank and flagged unreadable values for re-entry.
 

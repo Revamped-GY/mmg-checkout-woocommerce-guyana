@@ -58,21 +58,31 @@ jobs:
           php tests/run-atomic-option-tests.php
           php tests/run-credential-settings-tests.php
           php tests/run-payment-context-tests.php
+          php tests/run-payment-request-access-tests.php
+          php tests/run-hosted-availability-tests.php
           php tests/run-hosted-legacy-session-tests.php
+          php tests/run-importer-tests.php
           php tests/run-payment-verifier-tests.php
+          php tests/run-qr-order-idempotency-tests.php
           php tests/run-api-contract-tests.php
           php tests/run-initiated-scheduler-tests.php
           php tests/run-initiated-start-tests.php
+          php tests/run-subscription-renewal-safety-tests.php
+          php tests/run-support-bundle-redaction-tests.php
           php tests/run-updater-integrity-tests.php
 
       - name: Check checkout scripts
         if: matrix.php-version == '7.4'
         run: |
           set -euo pipefail
+          node --check assets/js/admin-order.js
+          node --check assets/js/admin-payment-requests.js
           node --check assets/js/blocks.js
+          node --check assets/js/checkout-compat.js
           node --check assets/js/checkout-guide.js
           node --check assets/js/initiated-blocks.js
           node --check assets/js/initiated-status.js
+          node --check assets/js/qr-frontend.js
 
   version-sync:
     name: Plugin version markers agree
