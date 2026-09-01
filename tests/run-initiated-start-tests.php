@@ -278,10 +278,17 @@ final class MMGWC_Payment_Context {
 final class MMGWC_API {
 	public static $initiate_calls = 0;
 	public static $save_calls_at_dispatch = array();
+	public static $initiate_result = array();
 
 	public static function reset(): void {
 		self::$initiate_calls = 0;
 		self::$save_calls_at_dispatch = array();
+		self::$initiate_result = array(
+			'objectReference' => '20373216452995',
+			'executionId' => '20373216452995',
+			'status' => 'pending',
+			'expiryTime' => gmdate( 'c', time() + 600 ),
+		);
 	}
 
 	public static function normalise_customer_account( string $customer_account ): string {
@@ -289,15 +296,10 @@ final class MMGWC_API {
 		return is_string( $digits ) && preg_match( '/^\d{7}$/', $digits ) === 1 ? $digits : '';
 	}
 
-	public static function initiate_payment( array $config, string $customer_account, string $amount, string $correlation_id = '' ): array {
+	public static function initiate_payment( array $config, string $customer_account, string $amount, string $correlation_id = '' ) {
 		self::$initiate_calls++;
 		self::$save_calls_at_dispatch[] = Initiated_Start_Test_Runtime::$order->save_calls;
-		return array(
-			'objectReference' => '20373216452995',
-			'executionId' => '20373216452995',
-			'status' => 'pending',
-			'expiryTime' => gmdate( 'c', time() + 600 ),
-		);
+		return self::$initiate_result;
 	}
 
 	public static function initiated_reference( array $response ) {
@@ -486,6 +488,47 @@ initiated_start_check( MMGWC_API::$initiate_calls === 1, 'A valid durable state 
 initiated_start_check( MMGWC_API::$save_calls_at_dispatch === array( 1 ), 'Exactly one preparation save completes before the MMG API dispatch.' );
 initiated_start_check( MMGWC_Payment_Context::$fresh_order_calls >= 2, 'The order is reloaded after its preparation save and before dispatch.' );
 initiated_start_check( ! in_array( 'initiation_uncertain', $order->status_writes, true ), 'A valid initiation never writes initiation_uncertain.' );
+
+$order = new_initiated_start_order();
+MMGWC_API::$initiate_result = new WP_Error( 'mmgwc_initiated_rejected', 'MMG rejected the request.' );
+$outcome = invoke_initiated_start( $order );
+$result = $outcome['result'];
+initiated_start_check( $outcome['throwable'] === null, 'A definitive MMG rejection does not throw.' );
+initiated_start_check( is_wp_error( $result ) && $result->get_error_code() === 'mmgwc_initiated_not_sent', 'A definitive MMG rejection reports that no request was sent.' );
+initiated_start_check( MMGWC_API::$initiate_calls === 1, 'A definitive MMG rejection records one attempted API dispatch.' );
+initiated_start_check( $order->get_status() === 'pending', 'A definitive MMG rejection restores the retryable pending order status.' );
+initiated_start_check( ! $order->is_paid(), 'A definitive MMG rejection leaves the order unpaid.' );
+initiated_start_check( $order->get_payment_method() === 'mmg_initiated', 'A definitive MMG rejection preserves the selected payment method.' );
+initiated_start_check( $order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'not_sent', 'A definitive MMG rejection records the not-sent state.' );
+foreach ( array( MMGWC_META_INITIATED_REFERENCE, MMGWC_META_INITIATED_CORRELATION, MMGWC_META_INITIATED_EXPIRES_AT, MMGWC_META_INITIATED_LAST_CHECK, MMGWC_META_INITIATED_ATTEMPTS, MMGWC_META_INITIATED_CUSTOMER_HINT ) as $cleared_key ) {
+	initiated_start_check( $order->get_meta( $cleared_key ) === '', 'A definitive MMG rejection clears ' . $cleared_key . '.' );
+}
+initiated_start_check( ! in_array( 'initiation_uncertain', $order->status_writes, true ), 'A definitive MMG rejection is not stored as an uncertain request.' );
+
+MMGWC_API::$initiate_result = array(
+	'objectReference' => '20373216452996',
+	'executionId' => '20373216452996',
+	'status' => 'pending',
+	'expiryTime' => gmdate( 'c', time() + 600 ),
+);
+$retry_outcome = invoke_initiated_start( $order );
+initiated_start_check( is_array( $retry_outcome['result'] ), 'A definitely rejected request can be retried safely.' );
+initiated_start_check( MMGWC_API::$initiate_calls === 2, 'A retry after a definitive rejection dispatches one new request.' );
+initiated_start_check( $order->get_status() === 'on-hold' && $order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'pending', 'A successful retry enters the normal pending approval state.' );
+
+$order = new_initiated_start_order();
+MMGWC_API::$initiate_result = new WP_Error( 'mmgwc_initiated_transport_uncertain', 'The connection ended without a final response.' );
+$outcome = invoke_initiated_start( $order );
+$result = $outcome['result'];
+initiated_start_check( $outcome['throwable'] === null, 'An ambiguous transport result does not throw.' );
+initiated_start_check( is_wp_error( $result ) && $result->get_error_code() === 'mmgwc_initiation_uncertain', 'An ambiguous transport result remains uncertain.' );
+initiated_start_check( MMGWC_API::$initiate_calls === 1, 'An ambiguous transport result records one attempted API dispatch.' );
+initiated_start_check( $order->get_status() === 'on-hold', 'An ambiguous transport result keeps the unpaid order on hold.' );
+initiated_start_check( $order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'initiation_uncertain', 'An ambiguous transport result stores the uncertain state.' );
+initiated_start_check( $order->get_meta( MMGWC_META_INITIATED_CORRELATION ) !== '', 'An ambiguous transport result preserves its correlation ID for review.' );
+$retry_outcome = invoke_initiated_start( $order );
+initiated_start_check( is_wp_error( $retry_outcome['result'] ) && ! is_array( $retry_outcome['result'] ), 'An uncertain request cannot be sent again.' );
+initiated_start_check( MMGWC_API::$initiate_calls === 1, 'Retrying an uncertain request never dispatches a duplicate request.' );
 
 $order = new_initiated_start_order();
 $order->fail_on_save( 1 );

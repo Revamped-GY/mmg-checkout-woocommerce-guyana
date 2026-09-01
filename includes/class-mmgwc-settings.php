@@ -40,6 +40,31 @@ final class MMGWC_Settings {
 		self::update_all( $merged );
 	}
 
+	/**
+	 * Save a partial update atomically with respect to protected-value errors.
+	 * Importers use this path so a rejected secret cannot produce a misleading
+	 * success message or a partial credential update.
+	 */
+	public static function update_partial_checked( array $changes ): bool {
+		if ( class_exists( 'MMGWC_Secure_Store' ) ) {
+			MMGWC_Secure_Store::reset_operation_errors();
+		}
+		$existing = self::get_all();
+		$prepared = self::encrypt_protected( array_merge( $existing, $changes ) );
+		if ( class_exists( 'MMGWC_Secure_Store' ) && ! empty( MMGWC_Secure_Store::operation_errors() ) ) {
+			return false;
+		}
+		$updated = update_option( MMGWC_SETTINGS_OPTION_KEY, $prepared, false );
+		if ( $updated ) {
+			return true;
+		}
+
+		// WordPress also returns false when the stored value is already identical.
+		// Confirm that state explicitly so a database write failure cannot be
+		// reported as a successful credential import.
+		return self::get_all() === $prepared;
+	}
+
 	public static function is_debug_enabled(): bool {
 		$override = self::get_constant_override( 'debug' );
 		if ( $override !== null ) {
@@ -92,6 +117,11 @@ final class MMGWC_Settings {
 	public static function get_config( string $mode ): array {
 		$mode = $mode === 'live' ? 'live' : 'sandbox';
 		$prefix = $mode === 'live' ? 'live_' : 'sandbox_';
+		$api_wss_mid = trim( (string) self::get( $prefix . 'api_wss_mid', '' ) );
+		$api_credit_account_id = trim( (string) self::get( $prefix . 'api_credit_account_id', '' ) );
+		if ( $api_credit_account_id === '' ) {
+			$api_credit_account_id = $api_wss_mid;
+		}
 
 		return array(
 			'mode' => $mode,
@@ -103,16 +133,16 @@ final class MMGWC_Settings {
 			'public_key' => (string) self::get( $prefix . 'public_key', '' ),
 			'private_key' => (string) self::get( $prefix . 'private_key', '' ),
 
-			// Transaction Verification API details are environment-specific and
-			// are also reused by the optional approval-request method. Legacy global
+			// Shared Merchant Initiated API details are environment-specific and
+			// also support optional Transaction Lookup. Legacy global
 			// values are Sandbox fallbacks because the former endpoint was MMG UAT.
 			'mwallet_base_url' => trim( (string) self::get( $prefix . 'api_mwallet_base_url', $mode === 'sandbox' ? self::DEFAULT_SANDBOX_API_BASE : '' ) ),
 			'api_key' => trim( (string) self::get( $prefix . 'api_key', '' ) ),
-			'wss_mid' => trim( (string) self::get( $prefix . 'api_wss_mid', '' ) ),
+			'wss_mid' => $api_wss_mid,
 			'wss_mkey' => trim( (string) self::get( $prefix . 'api_wss_mkey', '' ) ),
 			'wss_msecret' => trim( (string) self::get( $prefix . 'api_wss_msecret', '' ) ),
 			'password' => trim( (string) self::get( $prefix . 'api_password', '' ) ),
-			'credit_account_id' => trim( (string) self::get( $prefix . 'api_credit_account_id', '' ) ),
+			'credit_account_id' => $api_credit_account_id,
 
 			// Status mapping.
 			'status_success_virtual'  => (string) self::get( 'status_success_virtual', '' ),
@@ -250,7 +280,7 @@ final class MMGWC_Settings {
 			'live_public_key'    => 'MMGWC_LIVE_PUBLIC_KEY',
 			'live_private_key'   => 'MMGWC_LIVE_PRIVATE_KEY',
 
-			// Legacy global Transaction Verification API overrides.
+			// Legacy global Merchant Initiated API overrides.
 			'api_mwallet_base_url' => 'MMGWC_MWALLET_BASE_URL',
 			'api_key'              => 'MMGWC_API_KEY',
 			'api_wss_mid'          => 'MMGWC_WSS_MID',
@@ -258,7 +288,7 @@ final class MMGWC_Settings {
 			'api_wss_msecret'      => 'MMGWC_WSS_MSECRET',
 			'api_password'         => 'MMGWC_API_PASSWORD',
 
-			// Environment-specific Transaction Verification API overrides.
+			// Environment-specific Merchant Initiated API overrides.
 			'sandbox_api_mwallet_base_url' => 'MMGWC_SANDBOX_MWALLET_BASE_URL',
 			'sandbox_api_key'              => 'MMGWC_SANDBOX_API_KEY',
 			'sandbox_api_wss_mid'          => 'MMGWC_SANDBOX_WSS_MID',

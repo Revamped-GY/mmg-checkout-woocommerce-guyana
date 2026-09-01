@@ -2,11 +2,35 @@
 
 All notable changes to MMG Checkout for WooCommerce are recorded here. The format follows Keep a Changelog and the project follows Semantic Versioning.
 
+## [2.16.2] - 2026-09-01
+
+### Fixed
+
+- Restored standard hosted checkout when the optional Merchant Initiated API fields are empty.
+- Accepted MMG's encrypted Checkout Response using exact session, credential mode, order snapshot and transaction uniqueness checks.
+- Kept unavailable Transaction Lookup requests from blocking a documented hosted payment result.
+- Preserved all stored merchant settings during plugin updates and unrelated settings saves.
+- Distinguished requests rejected before creation from uncertain connection results, so definite rejections can be retried safely.
+- Replaced missing walkthrough images and added the MMG OTP step to the hosted checkout guidance.
+
+### Changed
+
+- Renamed the optional shared API fields to Merchant Initiated API and removed the separate authorisation checkbox.
+- Uses the documented Transaction Lookup fields as an additional check when they are configured.
+- Imports optional Sandbox or Live Merchant Initiated Postman environments in the same field order as MMG's JSON.
+
+### Security
+
+- Made public QR order creation atomic and bounded each link to one active unpaid order.
+- Restricted Payment Request links and emails to valid module-owned MMG orders.
+- Moved subscription renewal creation to an owned POST action and invalidated replaced links.
+- Expanded support-bundle redaction for API headers, tokens, passwords and private keys.
+
 ## [2.16.1] - 2026-08-31
 
 ### Fixed
 
-- Renamed the shared API fields to Transaction Verification and separated approval-only settings.
+- Separated shared API fields from approval-only settings.
 - Prevented protected plaintext and encrypted storage values from appearing in settings forms.
 - Preserved stored credentials when replacement fields are left blank and flagged unreadable values for re-entry.
 

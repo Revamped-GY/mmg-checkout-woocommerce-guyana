@@ -15,6 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class MMGWC_QR_Payments {
 	private const TRANSIENT_PREFIX = 'mmgwc_qr_tpl_';
+	private const ORDER_LOCK_PREFIX = 'mmgwc_qr_order_lock_';
 	public const INDEX_OPTION      = 'mmgwc_qr_templates_index';
 
 	private static $handled = false;
@@ -135,27 +136,28 @@ final class MMGWC_QR_Payments {
 		$order = $order_id ? wc_get_order( $order_id ) : false;
 
 		if ( $order && $order->is_paid() ) {
-			self::render_public_message( 'This invoice is already paid. Thank you.' );
+			if ( $one_time === 'yes' ) {
+				self::render_public_message( 'This invoice is already paid. Thank you.' );
+				return;
+			}
+			// A reusable link issues its next order only after the previous one is
+			// paid. Repeated requests reuse one active unpaid order.
+			$order = false;
+		}
+
+		if ( $expires_at && $now > $expires_at ) {
+			self::render_public_message( 'This payment link has expired. Please request a new one.' );
 			return;
 		}
 
 		if ( ! $order ) {
-			$order = self::create_order_from_template( $token, $tpl );
+			$ttl = $expires_at ? max( 60, ( $expires_at - $now ) ) : DAY_IN_SECONDS * 7;
+			$order = self::maybe_create_checkout_order_for_token( $token, $tpl, $ttl );
 			if ( ! $order ) {
-				self::render_public_message( 'Could not create your order. Please contact the store.' );
+				self::render_public_message( 'This payment link is being opened. Please try again.' );
 				return;
 			}
 			$order_id = (int) $order->get_id();
-
-			if ( $one_time === 'yes' ) {
-				$tpl['order_id'] = $order_id;
-				self::set_template( $token, $tpl, $expires_at ? max( 60, ( $expires_at - $now ) ) : DAY_IN_SECONDS * 7 );
-			}
-		}
-
-		if ( $expires_at && $now > $expires_at && ! $order->is_paid() ) {
-			self::render_public_message( 'This payment link has expired. Please request a new one.' );
-			return;
 		}
 
 		if ( self::should_use_checkout_fallback() ) {
@@ -322,26 +324,45 @@ final class MMGWC_QR_Payments {
 	}
 
 	public static function maybe_create_checkout_order_for_token( string $token, array $tpl, int $ttl_seconds ) {
-		if ( ! function_exists( 'wc_create_order' ) ) {
+		if ( ! function_exists( 'wc_create_order' ) || ! class_exists( 'MMGWC_Atomic_Option' ) ) {
 			return false;
 		}
 
-		$existing_id = isset( $tpl['order_id'] ) ? absint( $tpl['order_id'] ) : 0;
-		if ( $existing_id && function_exists( 'wc_get_order' ) ) {
-			$existing = wc_get_order( $existing_id );
-			if ( $existing ) {
-				return $existing;
+		$lock_key = self::ORDER_LOCK_PREFIX . hash( 'sha256', $token );
+		$owned_lock = MMGWC_Atomic_Option::acquire_lock( $lock_key, 30 );
+		if ( $owned_lock === '' ) {
+			// Another request may have just published the winning order. Reuse it
+			// when visible instead of creating a competing order.
+			$fresh = self::get_template( $token );
+			$fresh_id = is_array( $fresh ) ? absint( $fresh['order_id'] ?? 0 ) : 0;
+			return $fresh_id > 0 && function_exists( 'wc_get_order' ) ? wc_get_order( $fresh_id ) : false;
+		}
+
+		try {
+			$fresh = self::get_template( $token );
+			if ( is_array( $fresh ) ) {
+				$tpl = $fresh;
 			}
-		}
 
-		$order = self::create_order_from_template( $token, $tpl );
-		if ( $order && is_object( $order ) && method_exists( $order, 'get_id' ) ) {
-			$tpl['order_id'] = (int) $order->get_id();
-			self::set_template( $token, $tpl, $ttl_seconds );
-			return $order;
-		}
+			$existing_id = isset( $tpl['order_id'] ) ? absint( $tpl['order_id'] ) : 0;
+			if ( $existing_id && function_exists( 'wc_get_order' ) ) {
+				$existing = wc_get_order( $existing_id );
+				if ( $existing && ( ! $existing->is_paid() || (string) ( $tpl['one_time'] ?? 'yes' ) === 'yes' ) ) {
+					return $existing;
+				}
+			}
 
-		return false;
+			$order = self::create_order_from_template( $token, $tpl );
+			if ( $order && is_object( $order ) && method_exists( $order, 'get_id' ) ) {
+				$tpl['order_id'] = (int) $order->get_id();
+				self::set_template( $token, $tpl, max( 60, $ttl_seconds ) );
+				return $order;
+			}
+
+			return false;
+		} finally {
+			MMGWC_Atomic_Option::release_lock( $lock_key, $owned_lock );
+		}
 	}
 
 	private static function validate_template( array $tpl ) {
@@ -457,6 +478,10 @@ final class MMGWC_QR_Payments {
 		if ( ! function_exists( 'wc_create_order' ) ) {
 			return false;
 		}
+		$valid = self::validate_template( $tpl );
+		if ( is_wp_error( $valid ) ) {
+			return false;
+		}
 
 		if ( is_array( $token ) ) {
 			$token = reset( $token );
@@ -479,6 +504,7 @@ final class MMGWC_QR_Payments {
 			$args['customer_id'] = $user_id;
 		}
 
+		$order = false;
 		try {
 			$order = wc_create_order( $args );
 			if ( ! $order ) {
@@ -496,12 +522,14 @@ final class MMGWC_QR_Payments {
 				$qty = max( 1, absint( $tpl['qty'] ?? 1 ) );
 				$product = function_exists( 'wc_get_product' ) ? wc_get_product( $pid ) : false;
 				if ( ! $product || $product->get_status() !== 'publish' ) {
+					self::discard_uncommitted_order( $order );
 					return false;
 				}
 				$order->add_product( $product, $qty );
 			} else {
 				$amount = isset( $tpl['amount'] ) ? (float) $tpl['amount'] : 0;
 				if ( $amount <= 0 ) {
+					self::discard_uncommitted_order( $order );
 					return false;
 				}
 				$item = new WC_Order_Item_Fee();
@@ -530,10 +558,24 @@ final class MMGWC_QR_Payments {
 			$order->save();
 			return $order;
 		} catch ( Exception $e ) {
+			self::discard_uncommitted_order( $order );
 			MMGWC_Logger::error( 'QR order creation failed: ' . $e->getMessage() );
 		}
 
 		return false;
+	}
+
+	private static function discard_uncommitted_order( $order ): void {
+		if ( ! is_object( $order ) ) {
+			return;
+		}
+		if ( method_exists( $order, 'delete' ) ) {
+			$order->delete( true );
+			return;
+		}
+		if ( method_exists( $order, 'update_status' ) ) {
+			$order->update_status( 'cancelled', 'QR order creation did not complete.' );
+		}
 	}
 
 

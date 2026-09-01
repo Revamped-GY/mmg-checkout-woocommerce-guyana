@@ -148,7 +148,14 @@ public static function handle_subscription_actions(): void {
 	$user = wp_get_current_user();
 	$email = $user ? $user->user_email : '';
 
-	if ( $action === 'pause' ) {
+	if ( $action === 'renew' ) {
+		$pay_url = MMGWC_Subscriptions::customer_get_renewal_payment_url( $sub_id, get_current_user_id() );
+		if ( is_string( $pay_url ) && $pay_url !== '' ) {
+			wp_safe_redirect( $pay_url );
+			exit;
+		}
+		wc_add_notice( 'Unable to prepare the renewal. Please try again.', 'error' );
+	} elseif ( $action === 'pause' ) {
 		$ok = MMGWC_Subscriptions::customer_set_status( $sub_id, get_current_user_id(), (string) $email, 'paused' );
 		wc_add_notice( $ok ? 'Subscription paused.' : 'Unable to pause this subscription.', $ok ? 'success' : 'error' );
 	} elseif ( $action === 'resume' ) {
@@ -266,38 +273,32 @@ public static function render_invoices(): void {
 			$last_paid = isset( $sub['last_paid'] ) && $sub['last_paid'] ? wc_format_datetime( new WC_DateTime( $sub['last_paid'] ) ) : '';
 			$next_due = isset( $sub['next_due'] ) && $sub['next_due'] ? wc_format_datetime( new WC_DateTime( $sub['next_due'] ) ) : '';
 
-			$pay_url = MMGWC_Subscriptions::get_renewal_payment_url( $id );
-
 			echo '<tr>';
 			echo '<td data-title="Product">' . esc_html( $name ) . '</td>';
 			echo '<td data-title="Status">' . esc_html( ucfirst( $status ) ) . '</td>';
 			echo '<td data-title="Last paid">' . esc_html( $last_paid ) . '</td>';
 			echo '<td data-title="Next due">' . esc_html( $next_due ) . '</td>';
-			
-echo '<td data-title="Actions">';
-if ( $pay_url ) {
-	echo '<a class="button" href="' . esc_url( $pay_url ) . '">' . esc_html__( 'Renew', 'mmg-checkout-woocommerce' ) . '</a> ';
-} else {
-	echo '<span>' . esc_html__( 'Unavailable', 'mmg-checkout-woocommerce' ) . '</span> ';
-}
+			echo '<td data-title="Actions">';
 
-$nonce = wp_create_nonce( 'mmgwc_sub_action_' . $id );
-$endpoint_url = wc_get_account_endpoint_url( self::ENDPOINT_SUBSCRIPTIONS );
-$render_action_form = static function ( string $action, string $label ) use ( $id, $nonce, $endpoint_url ) {
-	echo '<form method="post" action="' . esc_url( $endpoint_url ) . '" style="display:inline">';
-	echo '<input type="hidden" name="mmgwc_sub_action" value="' . esc_attr( $action ) . '" />';
-	echo '<input type="hidden" name="sub_id" value="' . esc_attr( (string) $id ) . '" />';
-	echo '<input type="hidden" name="_wpnonce" value="' . esc_attr( $nonce ) . '" />';
-	echo '<button class="button" type="submit">' . esc_html( $label ) . '</button>';
-	echo '</form>';
-};
-if ( in_array( $status, array( 'active', 'due', 'overdue' ), true ) ) {
-	$render_action_form( 'pause', __( 'Pause', 'mmg-checkout-woocommerce' ) );
-} elseif ( in_array( $status, array( 'paused', 'stopped' ), true ) ) {
-	$render_action_form( 'resume', __( 'Resume', 'mmg-checkout-woocommerce' ) );
-}
+			$nonce = wp_create_nonce( 'mmgwc_sub_action_' . $id );
+			$endpoint_url = wc_get_account_endpoint_url( self::ENDPOINT_SUBSCRIPTIONS );
+			$render_action_form = static function ( string $action, string $label ) use ( $id, $nonce, $endpoint_url ) {
+				echo '<form method="post" action="' . esc_url( $endpoint_url ) . '" style="display:inline">';
+				echo '<input type="hidden" name="mmgwc_sub_action" value="' . esc_attr( $action ) . '" />';
+				echo '<input type="hidden" name="sub_id" value="' . esc_attr( (string) $id ) . '" />';
+				echo '<input type="hidden" name="_wpnonce" value="' . esc_attr( $nonce ) . '" />';
+				echo '<button class="button" type="submit">' . esc_html( $label ) . '</button>';
+				echo '</form>';
+			};
 
-echo '</td>';
+			if ( in_array( $status, array( 'active', 'due', 'overdue' ), true ) ) {
+				$render_action_form( 'renew', __( 'Renew', 'mmg-checkout-woocommerce' ) );
+				$render_action_form( 'pause', __( 'Pause', 'mmg-checkout-woocommerce' ) );
+			} elseif ( in_array( $status, array( 'paused', 'stopped' ), true ) ) {
+				$render_action_form( 'resume', __( 'Resume', 'mmg-checkout-woocommerce' ) );
+			}
+
+			echo '</td>';
 			echo '</tr>';
 		}
 

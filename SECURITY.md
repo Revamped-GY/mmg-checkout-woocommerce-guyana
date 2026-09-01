@@ -44,9 +44,10 @@ You will get an acknowledgement within five working days. If the issue is confir
 - Never logs raw tokens, secret keys or PEM blocks. The logger redacts known sensitive keys, bearer headers and PEM blocks recursively.
 - Verifies the host of the update package, refuses non-HTTPS download URLs and requires the exact release ZIP name.
 - Requires and verifies the update package SHA-256 before WordPress can unpack or install it.
-- Marks an order paid only after authenticated MMG lookup matches the immutable amount, currency, merchant, mode and transaction identifiers.
+- For hosted checkout, accepts the documented decrypted Checkout Response only when its random per-checkout merchant transaction ID, credential mode, MMG transaction ID and immutable order and merchant snapshot all match. Optional Transaction Lookup is also required to match when it reports a final transaction state.
+- For Merchant Initiated checkout, keeps the order unpaid until Transaction Lookup matches the immutable amount, currency, merchant, mode and transaction identifiers and reports a completed payment.
 - Returns a single generic error for any decryption failure to avoid oracle leakage.
-- Uses POST plus nonces for state-changing customer and admin actions so nonces do not leak in referer or browser history.
+- Uses POST plus a nonce or an exact order-key capability for state-changing customer and admin actions, so authorisation values do not leak in referer or browser history.
 - Treats all customer and webhook input as untrusted.
 
 ## WooCommerce concurrency boundary

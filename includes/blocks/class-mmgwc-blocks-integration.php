@@ -19,8 +19,7 @@ final class MMGWC_Blocks_Integration extends AbstractPaymentMethodType {
 		}
 		$mode = MMGWC_Settings::get_mode();
 		$config = MMGWC_Settings::get_config( $mode );
-		return empty( MMGWC_Payment_Verifier::missing_api_fields( $config ) )
-			&& empty( MMGWC_Payment_Context::missing_hosted_fields( $config ) )
+		return empty( MMGWC_Payment_Context::missing_hosted_fields( $config ) )
 			&& MMGWC_Payment_Context::can_process_currency( MMGWC_Payment_Context::current_checkout_currency() );
 	}
 

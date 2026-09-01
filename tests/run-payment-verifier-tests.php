@@ -212,6 +212,25 @@ $valid = MMGWC_Payment_Verifier::verify_callback( $order, base_response(), base_
 check( $valid['valid'] === true, 'A fully matching authenticated transaction is accepted.' );
 check( $valid['idempotent'] === false, 'A new payment is not labelled idempotent.' );
 
+$hosted_only_config = array(
+	'mode' => 'live',
+	'checkout_url' => 'https://mmgpg.mymmg.gy/mmg-pg/web/payments',
+	'merchant_id' => '9991161',
+);
+$hosted_only = MMGWC_Payment_Verifier::verify_hosted_callback( $order, base_response(), $hosted_only_config );
+check( $hosted_only['valid'] === true, 'A matching encrypted Checkout Response succeeds without Merchant Initiated API credentials.' );
+check( ( $hosted_only['source'] ?? '' ) === 'hosted_callback', 'Hosted-only verification records the encrypted Checkout Response as its source.' );
+
+$hosted_wrong_merchant = $hosted_only_config;
+$hosted_wrong_merchant['merchant_id'] = '1112222';
+$result = MMGWC_Payment_Verifier::verify_hosted_callback( $order, base_response(), $hosted_wrong_merchant );
+check_code( $result, 'merchant_configuration_mismatch', 'A hosted response cannot pay an order for a different configured merchant.' );
+
+$hosted_changed_order = new WC_Order( 42, base_meta() );
+$hosted_changed_order->set_total( '600.00' );
+$result = MMGWC_Payment_Verifier::verify_hosted_callback( $hosted_changed_order, base_response(), $hosted_only_config );
+check_code( $result, 'order_changed', 'A hosted response cannot pay an order whose total changed after checkout started.' );
+
 $newer_meta = base_meta();
 $newer_meta[ MMGWC_META_MERCHANT_TXN_ID ] = '42-1788120099-ffffffffffffffffffffffffffffffff';
 $newer_meta[ MMGWC_META_MODE ] = 'sandbox';
@@ -440,8 +459,16 @@ check( ! array_key_exists( 'debitParty', $lookup_record ) && ! array_key_exists(
 
 $missing = base_config();
 $missing['api_key'] = '';
-check( in_array( 'api_key', MMGWC_Payment_Verifier::missing_api_fields( $missing ), true ), 'Missing lookup credentials keep the gateway fail closed.' );
-check( MMGWC_Payment_Verifier::missing_api_fields( base_config() ) === array(), 'Standard hosted checkout verification does not require an approval-request credit account or enable switch.' );
+check( in_array( 'api_key', MMGWC_Payment_Verifier::missing_lookup_fields( $missing ), true ), 'Missing API values are reported for optional Transaction Lookup.' );
+check( MMGWC_Payment_Verifier::missing_lookup_fields( base_config() ) === array(), 'Transaction Lookup uses the shared Merchant Initiated merchant headers.' );
+$lookup_without_password = base_config();
+$lookup_without_password['password'] = '';
+check( MMGWC_Payment_Verifier::missing_lookup_fields( $lookup_without_password ) === array(), 'The published Transaction Lookup fields do not require the API password.' );
+check( in_array( 'password', MMGWC_Payment_Verifier::missing_api_fields( $lookup_without_password ), true ), 'Initiated payment authentication still requires the API password.' );
+check( MMGWC_Payment_Verifier::hosted_lookup_is_decisive( array( 'transactionStatus' => 'successful' ) ) === true, 'A successful hosted lookup is decisive.' );
+check( MMGWC_Payment_Verifier::hosted_lookup_is_decisive( array( 'status' => 'rejected' ) ) === true, 'A known final hosted lookup failure is decisive.' );
+check( MMGWC_Payment_Verifier::hosted_lookup_is_decisive( array( 'transactionStatus' => 'pending' ) ) === false, 'A pending hosted lookup remains advisory.' );
+check( MMGWC_Payment_Verifier::hosted_lookup_is_decisive( array( 'error' => 'lookup unavailable' ) ) === false, 'An error-shaped hosted lookup without a final status remains advisory.' );
 
 check( MMGWC_Payment_Verifier::acquire_order_lock( 42 ) === true, 'The first verifier acquires the order lock.' );
 check( MMGWC_Payment_Verifier::acquire_order_lock( 42 ) === false, 'A concurrent verifier cannot acquire the same order lock.' );

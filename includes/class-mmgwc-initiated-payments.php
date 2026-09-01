@@ -59,8 +59,8 @@ final class MMGWC_Initiated_Payments {
 	 * @return array|WP_Error
 	 */
 	public static function start( WC_Order $order, string $customer_account ) {
-		if ( (string) MMGWC_Settings::get( 'initiated_enabled', 'no' ) !== 'yes' || (string) MMGWC_Settings::get( 'initiated_authorised', 'no' ) !== 'yes' ) {
-			return new WP_Error( 'mmgwc_initiated_not_authorised', 'MMG app approval requests are disabled or do not have recorded MMG authorisation.' );
+		if ( (string) MMGWC_Settings::get( 'initiated_enabled', 'no' ) !== 'yes' ) {
+			return new WP_Error( 'mmgwc_initiated_disabled', 'MMG app approval requests are disabled.' );
 		}
 		if ( ! $order->needs_payment() ) {
 			return new WP_Error( 'mmgwc_order_not_payable', 'This order no longer accepts payment.' );
@@ -145,8 +145,7 @@ final class MMGWC_Initiated_Payments {
 				&& (string) $prepared_order->get_meta( MMGWC_META_INITIATED_STATUS ) === 'initiating'
 				&& hash_equals( $correlation_id, (string) $prepared_order->get_meta( MMGWC_META_INITIATED_CORRELATION ) )
 				&& self::prepared_snapshot_matches_order( $prepared_order, $snapshot )
-				&& (string) MMGWC_Settings::get( 'initiated_enabled', 'no' ) === 'yes'
-				&& (string) MMGWC_Settings::get( 'initiated_authorised', 'no' ) === 'yes';
+				&& (string) MMGWC_Settings::get( 'initiated_enabled', 'no' ) === 'yes';
 			if ( ! $postconditions_match ) {
 				if ( $prepared_order instanceof WC_Order ) {
 					$order = $prepared_order;
@@ -166,8 +165,14 @@ final class MMGWC_Initiated_Payments {
 				$correlation_id
 			);
 			if ( is_wp_error( $response ) ) {
+				$reason = $response->get_error_code();
+				if ( in_array( $reason, array( 'mmgwc_invalid_initiated_request', 'mmgwc_initiated_authentication_failed', 'mmgwc_initiated_rejected' ), true ) ) {
+					$request_started = false;
+					self::mark_initiation_not_sent( $order, $reason );
+					return new WP_Error( 'mmgwc_initiated_not_sent', 'MMG did not accept the approval request, so no request was sent to the app. Try again or choose MMG hosted checkout.' );
+				}
 				self::mark_initiation_uncertain( $order, $correlation_id, $response->get_error_code() );
-				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG may have received the approval request. Do not try again. The store must check it with MMG.' );
+				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG did not return a final result. Do not try again while the store reviews the payment record.' );
 			}
 
 			$reference = MMGWC_API::initiated_reference( $response );
@@ -175,7 +180,7 @@ final class MMGWC_Initiated_Payments {
 			if ( is_wp_error( $reference ) || $status !== 'pending' ) {
 				$reason = is_wp_error( $reference ) ? $reference->get_error_code() : 'unexpected_status';
 				self::mark_initiation_uncertain( $order, $correlation_id, $reason );
-				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG returned an unclear approval result. Do not try again. The store must check it with MMG.' );
+				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG did not return a final approval result. Do not try again while the store reviews the payment record.' );
 			}
 
 			$expiry = self::parse_expiry( self::response_value( $response, array( 'expiryTime' ) ), $now );
@@ -185,8 +190,8 @@ final class MMGWC_Initiated_Payments {
 			$order->save();
 			$order->add_order_note( 'MMG approval request sent. The order remains unpaid until authenticated transaction lookup confirms settlement.' );
 			if ( ! self::track_pending_order( (int) $order->get_id() ) ) {
-				self::move_to_review( $order, 'The MMG approval request was accepted, but durable reconciliation could not be registered. Manual verification with MMG is required.' );
-				return new WP_Error( 'mmgwc_tracking_unavailable', 'MMG received the approval request, but automatic verification could not be registered. Do not try again. The store must check it with MMG.' );
+				self::move_to_review( $order, 'The MMG approval request was accepted, but durable reconciliation could not be registered. Review the transaction in the merchant records.' );
+				return new WP_Error( 'mmgwc_tracking_unavailable', 'MMG received the approval request, but automatic verification could not be registered. Do not try again. The store must review its merchant records.' );
 			}
 			self::schedule_check( (int) $order->get_id(), self::poll_interval(), false );
 
@@ -195,7 +200,7 @@ final class MMGWC_Initiated_Payments {
 			if ( $request_started ) {
 				$correlation_id = (string) $order->get_meta( MMGWC_META_INITIATED_CORRELATION );
 				self::mark_initiation_uncertain( $order, $correlation_id, 'unexpected_error' );
-				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG may have received the approval request. Do not try again. The store must check it with MMG.' );
+				return new WP_Error( 'mmgwc_initiation_uncertain', 'MMG did not return a final result. Do not try again while the store reviews the payment record.' );
 			}
 			throw $e;
 		} finally {
@@ -439,7 +444,7 @@ final class MMGWC_Initiated_Payments {
 					$order->update_meta_data( MMGWC_META_VERIFICATION_STATUS, 'verified:order_already_paid_review' );
 					$order->update_meta_data( MMGWC_META_INITIATED_STATUS, 'payment_confirmed_review' );
 					$order->save();
-					$order->add_order_note( 'MMG reported an additional settled approval transaction after the order was already paid or closed. Transaction ID: ' . $review_transaction_id . '. Review the possible duplicate payment with MMG.' );
+					$order->add_order_note( 'MMG reported an additional settled approval transaction after the order was already paid or closed. Transaction ID: ' . $review_transaction_id . '. Review the merchant records for a possible duplicate payment.' );
 					self::unschedule_order( $order_id );
 					return self::state( 'review', 'This order was already paid and MMG reported another payment. Do not pay again. The store will review it.' );
 				}
@@ -600,7 +605,7 @@ final class MMGWC_Initiated_Payments {
 			?>
 			<section class="mmgwc-initiated-status" data-state="review">
 				<h2>MMG payment request closed</h2>
-				<p class="mmgwc-initiated-status__message" role="status">Do not approve this request. The order is closed and the store is checking MMG for any late payment.</p>
+				<p class="mmgwc-initiated-status__message" role="status">Do not approve this request. The order is closed and the store is reviewing its merchant records for any late payment.</p>
 			</section>
 			<?php
 			return;
@@ -632,14 +637,14 @@ final class MMGWC_Initiated_Payments {
 		$status = strtolower( trim( (string) $order->get_meta( MMGWC_META_INITIATED_STATUS ) ) );
 		$reference = trim( (string) $order->get_meta( MMGWC_META_INITIATED_REFERENCE ) );
 		if ( in_array( $status, array( 'initiating', 'initiation_uncertain', 'verification_failed', 'review', 'payment_confirmed_review' ), true ) ) {
-			return new WP_Error( 'mmgwc_previous_request_review', 'A previous MMG request may still exist. Do not try again. The store must review it.' );
+			return new WP_Error( 'mmgwc_previous_request_review', 'A previous MMG request has no final result. Do not try again while the store reviews the payment record.' );
 		}
 		if ( preg_match( '/^\d{1,64}$/', $reference ) === 1 && ! in_array( $status, self::failed_provider_statuses(), true ) ) {
 			if ( ! $order->is_paid() && $order->needs_payment() && ! in_array( (string) $order->get_status(), array( 'cancelled', 'failed', 'refunded', 'trash' ), true ) ) {
 				$order->update_status( 'on-hold', 'Existing MMG approval request restored. The order is held until authenticated reconciliation reaches a final result.' );
 			}
 			if ( ! self::track_pending_order( (int) $order->get_id() ) ) {
-				return new WP_Error( 'mmgwc_tracking_unavailable', 'The existing MMG request could not be registered for automatic verification. Do not try again. The store must check it with MMG.' );
+				return new WP_Error( 'mmgwc_tracking_unavailable', 'The existing MMG request could not be registered for automatic verification. Do not try again. The store must review its merchant records.' );
 			}
 			self::schedule_check( (int) $order->get_id(), 5, false );
 			return array( 'reference' => $reference, 'reused' => true );
@@ -650,13 +655,13 @@ final class MMGWC_Initiated_Payments {
 	private static function pending_state( WC_Order $order ): array {
 		$status = strtolower( trim( (string) $order->get_meta( MMGWC_META_INITIATED_STATUS ) ) );
 		if ( $order->is_paid() ) {
-			return self::state( 'review', 'This order is already paid. Do not approve another payment request. The store is checking MMG for a possible duplicate.' );
+			return self::state( 'review', 'This order is already paid. Do not approve another payment request. The store is reviewing its merchant records for a possible duplicate.' );
 		}
 		if ( self::customer_must_not_approve( $order ) ) {
-			return self::state( 'review', 'Do not approve this request. The order is closed and the store is checking MMG for any late payment.' );
+			return self::state( 'review', 'Do not approve this request. The order is closed and the store is reviewing its merchant records for any late payment.' );
 		}
 		if ( in_array( $status, array( 'initiating', 'initiation_uncertain' ), true ) ) {
-			return self::state( 'review', 'MMG may have received the request. Do not pay again. The store must check it with MMG.' );
+			return self::state( 'review', 'MMG did not return a final result. Do not pay again while the store reviews the payment record.' );
 		}
 		if ( in_array( $status, array( 'verification_failed', 'review' ), true ) ) {
 			return self::state( 'review', 'MMG did not provide a safely verifiable final result. Do not pay again. The store will review it.' );
@@ -681,6 +686,25 @@ final class MMGWC_Initiated_Payments {
 			$order->add_order_note( $note );
 		}
 		MMGWC_Logger::warning( 'MMG approval request result uncertain', array( 'order_id' => $order->get_id(), 'correlation_id' => $correlation_id, 'reason' => sanitize_key( $reason ) ) );
+	}
+
+	/**
+	 * Restore a retryable unpaid order after MMG explicitly rejects the API
+	 * request. No approval request exists in this branch.
+	 */
+	private static function mark_initiation_not_sent( WC_Order $order, string $reason ): void {
+		$order->delete_meta_data( MMGWC_META_INITIATED_REFERENCE );
+		$order->delete_meta_data( MMGWC_META_INITIATED_CORRELATION );
+		$order->delete_meta_data( MMGWC_META_INITIATED_EXPIRES_AT );
+		$order->delete_meta_data( MMGWC_META_INITIATED_LAST_CHECK );
+		$order->delete_meta_data( MMGWC_META_INITIATED_ATTEMPTS );
+		$order->delete_meta_data( MMGWC_META_INITIATED_CUSTOMER_HINT );
+		$order->update_meta_data( MMGWC_META_INITIATED_STATUS, 'not_sent' );
+		if ( ! $order->is_paid() && $order->get_status() === 'on-hold' ) {
+			$order->set_status( 'pending', 'MMG rejected the approval request before it was created. The order remains unpaid and can be retried.' );
+		}
+		$order->save();
+		MMGWC_Logger::warning( 'MMG approval request was not sent', array( 'order_id' => $order->get_id(), 'reason' => sanitize_key( $reason ) ) );
 	}
 
 	private static function move_to_review( WC_Order $order, string $note, bool $preserve_order_status = false ): void {

@@ -199,6 +199,9 @@ final class MMGWC_Payment_Requests {
 
 		$created_order_id = isset( $_GET['created_order_id'] ) ? absint( $_GET['created_order_id'] ) : 0;
 		$order = $created_order_id ? wc_get_order( $created_order_id ) : null;
+		if ( ! self::is_payment_request_order( $order ) ) {
+			$order = null;
+		}
 
 		echo '<div class="wrap mmgwc-wrap">';
 		if ( class_exists( 'MMGWC_Admin_UI' ) ) {
@@ -464,7 +467,7 @@ final class MMGWC_Payment_Requests {
 		check_admin_referer( 'mmgwc_send_payment_request_' . $order_id );
 
 		$order = wc_get_order( $order_id );
-		if ( ! $order ) {
+		if ( ! self::is_payment_request_order( $order, true ) ) {
 			wp_die( 'Order not found.' );
 		}
 
@@ -488,7 +491,7 @@ final class MMGWC_Payment_Requests {
 	}
 
 	private static function send_payment_request_email( WC_Order $order, string $email ): bool {
-		if ( $email === '' || ! is_email( $email ) ) {
+		if ( ! self::is_payment_request_order( $order, true ) || $email === '' || ! is_email( $email ) ) {
 			return false;
 		}
 
@@ -525,6 +528,31 @@ final class MMGWC_Payment_Requests {
 		}
 
 		return $sent;
+	}
+
+	/**
+	 * Confirm that a supplied order belongs to this module before exposing its
+	 * order-pay capability or sending a branded payment request.
+	 */
+	private static function is_payment_request_order( $order, bool $require_payable = false ): bool {
+		if ( ! $order instanceof WC_Order ) {
+			return false;
+		}
+		if ( (string) $order->get_meta( MMGWC_META_PAYMENT_REQUEST ) !== 'yes' ) {
+			return false;
+		}
+		if ( (string) $order->get_payment_method() !== 'mmg_checkout' ) {
+			return false;
+		}
+		if ( ! $require_payable ) {
+			return true;
+		}
+		if ( $order->is_paid() || ! in_array( (string) $order->get_status(), array( 'pending', 'failed' ), true ) ) {
+			return false;
+		}
+
+		$expires_at = absint( $order->get_meta( MMGWC_META_PR_EXPIRES_AT ) );
+		return $expires_at <= 0 || time() <= $expires_at;
 	}
 
 	

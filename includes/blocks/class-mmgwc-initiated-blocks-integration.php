@@ -14,7 +14,7 @@ final class MMGWC_Initiated_Blocks_Integration extends AbstractPaymentMethodType
 	}
 
 	public function is_active() {
-		if ( MMGWC_Settings::get( 'initiated_enabled', 'no' ) !== 'yes' || MMGWC_Settings::get( 'initiated_authorised', 'no' ) !== 'yes' ) {
+		if ( MMGWC_Settings::get( 'initiated_enabled', 'no' ) !== 'yes' ) {
 			return false;
 		}
 		$config = MMGWC_Settings::get_config( MMGWC_Settings::get_mode() );
